@@ -13,6 +13,7 @@ import com.nexusguard.android.data.preferences.UserPreferencesRepository
 import com.nexusguard.android.data.preferences.UserPreferencesState
 import com.nexusguard.android.data.repository.AppUpdateUiState
 import com.nexusguard.android.data.repository.AppUpdaterRepository
+import com.nexusguard.android.data.repository.BatteryProfileManager
 import com.nexusguard.android.data.repository.CleanScanReport
 import com.nexusguard.android.data.repository.CleanerRepository
 import com.nexusguard.android.data.repository.RealSystemSnapshot
@@ -21,8 +22,10 @@ import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.ScannedFileCandidate
 import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.service.BoostSessionState
+import com.nexusguard.android.service.ChargeMonitorForegroundService
 import com.nexusguard.android.service.GameBoostManager
 import com.nexusguard.android.util.PdfReportExporter
+import com.nexusguard.android.worker.BatterySampleWorker
 import com.nexusguard.android.worker.SystemMonitorWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -44,6 +47,7 @@ class MainViewModel @Inject constructor(
     private val preferencesRepository: UserPreferencesRepository,
     private val sensorsRepository: SystemSensorsRepository,
     private val cleanerRepository: CleanerRepository,
+    private val batteryProfileManager: BatteryProfileManager,
     private val boostManager: GameBoostManager,
     private val appUpdaterRepository: AppUpdaterRepository,
     private val dao: NexusGuardDao
@@ -89,6 +93,16 @@ class MainViewModel @Inject constructor(
 
     private val _hasDndPermission = MutableStateFlow(boostManager.hasDndPermission())
     val hasDndPermission: StateFlow<Boolean> = _hasDndPermission.asStateFlow()
+
+    private val _hasWriteSettingsPermission = MutableStateFlow(batteryProfileManager.hasWriteSettingsPermission())
+    val hasWriteSettingsPermission: StateFlow<Boolean> = _hasWriteSettingsPermission.asStateFlow()
+
+    val chargingSessions = dao.observeChargingSessions()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
 
     private val _cleanReport = MutableStateFlow(
         CleanScanReport(
@@ -146,7 +160,10 @@ class MainViewModel @Inject constructor(
     val batteryUiState: StateFlow<BatteryUiState> = ScreenUiStateMappers.observeBatteryUiState(
         snapshotFlow = liveSnapshot,
         samplesFlow = batterySamples24h,
-        prefsFlow = preferencesState
+        prefsFlow = preferencesState,
+        chargingSessionsFlow = chargingSessions,
+        writeSettingsFlow = hasWriteSettingsPermission,
+        hasOemNativeChargeLimit = batteryProfileManager.hasOemNativeChargeLimit()
     ).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -164,6 +181,7 @@ class MainViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(appContext, true)
+            BatterySampleWorker.schedulePeriodicSampling(appContext)
             // Fase 2: Não corre refreshCleanScan() no init! Corre ao entrar em Limpar ou em "Analisar agora".
         }
         viewModelScope.launch {
@@ -193,6 +211,7 @@ class MainViewModel @Inject constructor(
 
     fun onAppResumed() {
         _hasDndPermission.value = boostManager.hasDndPermission()
+        _hasWriteSettingsPermission.value = batteryProfileManager.hasWriteSettingsPermission()
         appUpdaterRepository.onAppResumed()
         viewModelScope.launch {
             sensorsRepository.refreshSlowMetrics(force = false)
@@ -523,6 +542,51 @@ class MainViewModel @Inject constructor(
     fun setBatteryAlert(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setBatteryAlertEnabled(enabled)
+        }
+    }
+
+    fun activateNexusBatterySaver(onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = batteryProfileManager.activateNexusSaverProfile(isAutoTriggered = false)
+            _hasWriteSettingsPermission.value = batteryProfileManager.hasWriteSettingsPermission()
+            onResult(ok)
+        }
+    }
+
+    fun restoreNexusBatterySaver(onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = batteryProfileManager.restorePreviousSettings()
+            _hasWriteSettingsPermission.value = batteryProfileManager.hasWriteSettingsPermission()
+            onResult(ok)
+        }
+    }
+
+    fun setAutoBatterySaver(enabled: Boolean, thresholdPercent: Int = 20) {
+        viewModelScope.launch {
+            preferencesRepository.setAutoBatterySaver(enabled, thresholdPercent)
+        }
+    }
+
+    fun setChargeLimitAlarm(enabled: Boolean, targetPercent: Int = 80) {
+        viewModelScope.launch {
+            preferencesRepository.setChargeLimitAlarm(enabled, targetPercent)
+            if (enabled && liveSnapshot.value.battery.isCharging) {
+                try {
+                    val intent = android.content.Intent(appContext, ChargeMonitorForegroundService::class.java).apply {
+                        action = ChargeMonitorForegroundService.ACTION_START
+                    }
+                    androidx.core.content.ContextCompat.startForegroundService(appContext, intent)
+                } catch (_: Exception) {
+                }
+            } else if (!enabled) {
+                try {
+                    val intent = android.content.Intent(appContext, ChargeMonitorForegroundService::class.java).apply {
+                        action = ChargeMonitorForegroundService.ACTION_STOP
+                    }
+                    appContext.stopService(intent)
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 }

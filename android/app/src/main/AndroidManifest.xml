@@ -38,6 +38,11 @@
     <!-- Pedir desinstalação de apps quando o utilizador escolhe "Desinstalar" -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
+    <!-- Perfil Poupança Nexus: ajustar tempo limite do ecrã (30 s) e brilho automático sob pedido explícito -->
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
     <application
         android:name=".NexusGuardApp"
         android:allowBackup="true"
@@ -67,6 +72,24 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="game_boost_thermal_and_dnd_monitor" />
         </service>
+
+        <service
+            android:name=".service.ChargeMonitorForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="battery_charge_limit_alarm_monitor" />
+        </service>
+
+        <receiver
+            android:name=".service.PowerConnectionReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
 
         <!-- FileProvider para instalar atualizações de APK e partilhar relatórios -->
         <provider

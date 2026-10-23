@@ -434,8 +434,17 @@ fun Battery24hCanvasChart(
                 val barHeight = size.height * fraction
                 val x = index * (barWidth + spacingPx)
                 val y = size.height - barHeight
+                if (item.isCharging) {
+                    // Zona de carga colorida ao fundo
+                    drawRoundRect(
+                        color = colors.ok.copy(alpha = 0.16f),
+                        topLeft = Offset((x - spacingPx / 2f).coerceAtLeast(0f), 0f),
+                        size = Size(barWidth + spacingPx, size.height),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                    )
+                }
                 val barColor = when {
-                    item.isCharging -> colors.accent2
+                    item.isCharging -> colors.ok
                     item.levelPercent < 20 -> colors.danger
                     else -> colors.accent
                 }
@@ -592,6 +601,54 @@ object NexusSystemIntents {
                     Intent.ACTION_DELETE,
                     Uri.parse("package:$packageName")
                 ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    fun openWriteSettingsPermission(context: Context) {
+        try {
+            context.startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    fun openBatterySaverSettings(context: Context) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Exception) {
+            openOemBatteryProtectionSettings(context)
+        }
+    }
+
+    fun openDisplaySettings(context: Context) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_DISPLAY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    fun openOemBatteryProtectionSettings(context: Context) {
+        try {
+            context.startActivity(
+                Intent(Intent.ACTION_POWER_USAGE_SUMMARY).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
             )

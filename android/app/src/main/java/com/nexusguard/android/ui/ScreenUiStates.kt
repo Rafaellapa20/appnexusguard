@@ -2,6 +2,7 @@ package com.nexusguard.android.ui
 
 import androidx.compose.runtime.Immutable
 import com.nexusguard.android.data.local.BatterySampleEntity
+import com.nexusguard.android.data.local.ChargingSessionEntity
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.preferences.UserPreferencesState
 import com.nexusguard.android.data.repository.CleanScanReport
@@ -11,6 +12,8 @@ import com.nexusguard.android.data.repository.LiveStorageMetrics
 import com.nexusguard.android.data.repository.LiveThermalMetrics
 import com.nexusguard.android.data.repository.RealSystemSnapshot
 import com.nexusguard.android.data.repository.ScanProgress
+import com.nexusguard.android.domain.BatteryRateCalculator
+import com.nexusguard.android.domain.MeasuredBatteryConsumption
 import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.service.BoostSessionState
 import kotlinx.collections.immutable.ImmutableList
@@ -118,9 +121,19 @@ data class BatteryUiState(
         detailLineText = ""
     ),
     val batterySamples: ImmutableList<BatterySampleEntity> = persistentListOf(),
+    val measuredConsumption: MeasuredBatteryConsumption = MeasuredBatteryConsumption(),
+    val topConsumingApps24h: ImmutableList<InstalledAppUsageInfo> = persistentListOf(),
+    val chargingSessions: ImmutableList<ChargingSessionEntity> = persistentListOf(),
     val highBackgroundAppsCount: Int = 0,
     val unusedAppsCount: Int = 0,
     val hasUsageStatsPermission: Boolean = false,
+    val hasWriteSettingsPermission: Boolean = false,
+    val hasOemNativeChargeLimit: Boolean = false,
+    val nexusBatterySaverActive: Boolean = false,
+    val autoBatterySaverEnabled: Boolean = false,
+    val autoBatterySaverThresholdPercent: Int = 20,
+    val chargeLimitAlarmEnabled: Boolean = false,
+    val chargeLimitTargetPercent: Int = 80,
     val storageAlertEnabled: Boolean = true,
     val thermalAlertEnabled: Boolean = true,
     val batteryAlertEnabled: Boolean = true
@@ -229,20 +242,54 @@ object ScreenUiStateMappers {
     fun observeBatteryUiState(
         snapshotFlow: Flow<RealSystemSnapshot>,
         samplesFlow: Flow<List<BatterySampleEntity>>,
-        prefsFlow: Flow<UserPreferencesState>
+        prefsFlow: Flow<UserPreferencesState>,
+        chargingSessionsFlow: Flow<List<ChargingSessionEntity>> = kotlinx.coroutines.flow.flowOf(emptyList()),
+        writeSettingsFlow: Flow<Boolean> = kotlinx.coroutines.flow.flowOf(false),
+        hasOemNativeChargeLimit: Boolean = false
     ): Flow<BatteryUiState> {
         return combine(
             snapshotFlow,
             samplesFlow,
-            prefsFlow
-        ) { snapshot, samples, prefs ->
+            prefsFlow,
+            chargingSessionsFlow,
+            writeSettingsFlow
+        ) { snapshot, samples, prefs, sessions, hasWriteSettings ->
+            val now = System.currentTimeMillis()
+            val measured = BatteryRateCalculator.calculateConsumption(
+                samples = samples,
+                currentLevelPercent = snapshot.battery.levelPercent,
+                nowMillis = now
+            )
+            val top24h = if (snapshot.hasUsageStatsPermission) {
+                snapshot.installedApps
+                    .filter { (it.foregroundTime24hMillis ?: 0L) > 0L || it.hasForegroundService24h }
+                    .sortedWith(
+                        compareByDescending<InstalledAppUsageInfo> { it.foregroundTime24hMillis ?: 0L }
+                            .thenByDescending { it.hasForegroundService24h }
+                    )
+                    .take(10)
+                    .toImmutableList()
+            } else {
+                persistentListOf()
+            }
+
             BatteryUiState(
                 isLoading = snapshot.isLoading,
                 battery = snapshot.battery,
                 batterySamples = samples.toImmutableList(),
+                measuredConsumption = measured,
+                topConsumingApps24h = top24h,
+                chargingSessions = sessions.toImmutableList(),
                 highBackgroundAppsCount = snapshot.highBackgroundAppsCount,
                 unusedAppsCount = snapshot.unusedAppsCount,
                 hasUsageStatsPermission = snapshot.hasUsageStatsPermission,
+                hasWriteSettingsPermission = hasWriteSettings,
+                hasOemNativeChargeLimit = hasOemNativeChargeLimit,
+                nexusBatterySaverActive = prefs.nexusBatterySaverActive,
+                autoBatterySaverEnabled = prefs.autoBatterySaverEnabled,
+                autoBatterySaverThresholdPercent = prefs.autoBatterySaverThresholdPercent,
+                chargeLimitAlarmEnabled = prefs.chargeLimitAlarmEnabled,
+                chargeLimitTargetPercent = prefs.chargeLimitTargetPercent,
                 storageAlertEnabled = prefs.storageAlertEnabled,
                 thermalAlertEnabled = prefs.thermalAlertEnabled,
                 batteryAlertEnabled = prefs.batteryAlertEnabled

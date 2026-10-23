@@ -297,6 +297,11 @@ fun NexusGuardMainScreen(
                     onToggleStorageAlert = viewModel::setStorageAlert,
                     onToggleThermalAlert = viewModel::setThermalAlert,
                     onToggleBatteryAlert = viewModel::setBatteryAlert,
+                    onActivateNexusSaver = viewModel::activateNexusBatterySaver,
+                    onRestoreNexusSaver = viewModel::restoreNexusBatterySaver,
+                    onSetAutoBatterySaver = viewModel::setAutoBatterySaver,
+                    onSetChargeLimitAlarm = viewModel::setChargeLimitAlarm,
+                    onToggleDarkTheme = viewModel::setDarkTheme,
                     onViewBackgroundApps = {
                         navController.navigate(NexusTab.SYSTEM.route)
                     }

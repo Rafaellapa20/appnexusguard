@@ -72,7 +72,10 @@ data class LiveBatteryMetrics(
     val cycleCountText: String,
     val cycleCountReason: String,
     val statusLineText: String,
-    val detailLineText: String
+    val detailLineText: String,
+    val currentMa: Int? = null,
+    val estimatedPowerWatts: Double? = null,
+    val chargeTimeRemainingMs: Long = -1L
 )
 
 @Immutable
@@ -102,6 +105,7 @@ data class InstalledAppUsageInfo(
     val isGame: Boolean,
     val lastTimeUsedMillis: Long?,
     val foregroundTimeMillis: Long?,
+    val foregroundTime24hMillis: Long? = null,
     val daysSinceUse: Int?,
     val totalSizeBytes: Long,
     val cacheBytes: Long = 0L,
@@ -454,6 +458,16 @@ class SystemSensorsRepository @Inject constructor(
             ) ?: BatteryManager.BATTERY_STATUS_UNKNOWN
             val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
                 status == BatteryManager.BATTERY_STATUS_FULL
+            val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val currentNowUa = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+            val currentMa = if (currentNowUa != Int.MIN_VALUE && currentNowUa != 0) {
+                val raw = abs(currentNowUa)
+                if (raw > 10_000) raw / 1000 else raw
+            } else {
+                0
+            }
+            val isScreenOn = powerManager.isInteractive
 
             scope.launch(Dispatchers.IO) {
                 dao.insertBatterySample(
@@ -461,7 +475,9 @@ class SystemSensorsRepository @Inject constructor(
                         timestampEpochMillis = now,
                         levelPercent = pct,
                         temperatureCelsius = temp,
-                        isCharging = isCharging
+                        isCharging = isCharging,
+                        currentMa = currentMa,
+                        isScreenOn = isScreenOn
                     )
                 )
                 dao.pruneOldBatterySamples(now - 24L * 3600_000L)
@@ -536,14 +552,20 @@ class SystemSensorsRepository @Inject constructor(
             null
         }
 
+        val estimatedPowerWatts = if (currentMa != null && voltageMv > 0) {
+            (currentMa.toDouble() * voltageMv.toDouble()) / 1_000_000.0
+        } else {
+            null
+        }
+        val chargeTimeMs = if (isCharging && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            batteryManager.computeChargeTimeRemaining()
+        } else {
+            -1L
+        }
+
         val statusLine: String
         val detailLine: String
         if (isCharging) {
-            val chargeTimeMs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                batteryManager.computeChargeTimeRemaining()
-            } else {
-                -1L
-            }
             statusLine = if (chargeTimeMs > 60_000L) {
                 val mins = (chargeTimeMs / 60_000L).toInt()
                 val h = mins / 60
@@ -555,6 +577,9 @@ class SystemSensorsRepository @Inject constructor(
             detailLine = buildString {
                 append("Tensão ${voltageMv} mV")
                 if (currentMa != null) append(" · Corrente ${currentMa} mA")
+                if (estimatedPowerWatts != null) {
+                    append(String.format(Locale.forLanguageTag("pt-PT"), " · ~%.1f W", estimatedPowerWatts))
+                }
             }
         } else {
             if (currentMa != null && currentMa > 20 && chargeCounterUah > 10_000) {
@@ -590,7 +615,10 @@ class SystemSensorsRepository @Inject constructor(
             cycleCountText = cycleText,
             cycleCountReason = cycleReason,
             statusLineText = statusLine,
-            detailLineText = detailLine
+            detailLineText = detailLine,
+            currentMa = currentMa,
+            estimatedPowerWatts = estimatedPowerWatts,
+            chargeTimeRemainingMs = chargeTimeMs
         )
     }
 
@@ -692,6 +720,7 @@ class SystemSensorsRepository @Inject constructor(
     private fun readInstalledAppsUsage(hasUsagePermission: Boolean): ImmutableList<InstalledAppUsageInfo> {
         val pm = context.packageManager
         val now = System.currentTimeMillis()
+        val twentyFourHoursAgo = now - (24L * 3600_000L)
         val thirtyDaysAgo = now - (30L * 24L * 3600_000L)
         val ninetyDaysAgo = now - (90L * 24L * 3600_000L)
 
@@ -700,6 +729,31 @@ class SystemSensorsRepository @Inject constructor(
             usm.queryAndAggregateUsageStats(ninetyDaysAgo, now)
         } else {
             emptyMap()
+        }
+
+        val usage24hMap = if (hasUsagePermission) {
+            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            usm.queryAndAggregateUsageStats(twentyFourHoursAgo, now)
+        } else {
+            emptyMap()
+        }
+
+        val fgsPackages24h = mutableSetOf<String>()
+        if (hasUsagePermission) {
+            try {
+                val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                val events = usm.queryEvents(twentyFourHoursAgo, now)
+                val event = UsageEvents.Event()
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event)
+                    if (event.eventType == UsageEvents.Event.FOREGROUND_SERVICE_START ||
+                        event.eventType == UsageEvents.Event.FOREGROUND_SERVICE_STOP
+                    ) {
+                        event.packageName?.let { fgsPackages24h.add(it) }
+                    }
+                }
+            } catch (_: Exception) {
+            }
         }
 
         val storageStatsManager = context.getSystemService(Context.STORAGE_STATS_SERVICE) as? StorageStatsManager
@@ -750,12 +804,19 @@ class SystemSensorsRepository @Inject constructor(
                 (appInfo.packageName in knownGamePackages)
 
             val stats = usageMap[appInfo.packageName]
+            val stats24h = usage24hMap[appInfo.packageName]
             val lastUsed = stats?.lastTimeUsed ?: 0L
             val fgTime: Long? = if (hasUsagePermission) {
                 stats?.totalTimeInForeground ?: 0L
             } else {
                 null
             }
+            val fgTime24h: Long? = if (hasUsagePermission) {
+                stats24h?.totalTimeInForeground ?: 0L
+            } else {
+                null
+            }
+            val hadFgs24h = hasUsagePermission && appInfo.packageName in fgsPackages24h
 
             val pkgInfo = try {
                 pm.getPackageInfo(appInfo.packageName, 0)
@@ -820,11 +881,13 @@ class SystemSensorsRepository @Inject constructor(
                 isGame = isGame,
                 lastTimeUsedMillis = referenceTime,
                 foregroundTimeMillis = fgTime,
+                foregroundTime24hMillis = fgTime24h,
                 daysSinceUse = daysSinceUse,
                 totalSizeBytes = sizeEntry.totalBytes,
                 cacheBytes = sizeEntry.cacheBytes,
                 isSizeEstimatedApk = sizeEntry.isEstimatedApk,
-                isUnused30Days = isUnused30Days
+                isUnused30Days = isUnused30Days,
+                hasForegroundService24h = hadFgs24h
             )
         }.sortedWith(
             compareByDescending<InstalledAppUsageInfo> { it.totalSizeBytes }
