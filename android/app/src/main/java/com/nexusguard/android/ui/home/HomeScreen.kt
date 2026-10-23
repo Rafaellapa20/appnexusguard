@@ -67,6 +67,7 @@ import java.util.Locale
 @Composable
 fun HomeScreen(
     uiState: HomeUiState,
+    onStartDeepClean: () -> Unit,
     onRunAnalysis: () -> Unit,
     onApplySafeFixes: () -> Unit,
     onOpenBattery: () -> Unit,
@@ -131,7 +132,7 @@ fun HomeScreen(
     }
 
     val tempText = uiState.battery.temperatureCelsius?.let {
-        String.format(Locale("pt", "PT"), "%.1f °C", it)
+        String.format(Locale.forLanguageTag("pt-PT"), "%.1f °C", it)
     } ?: "Indisponível (sensor não reportado)"
     val batteryDotColor = if (uiState.battery.isHealthy && (uiState.battery.temperatureCelsius ?: 30f) < 40f) {
         colors.ok
@@ -235,13 +236,23 @@ fun HomeScreen(
             )
         }
 
-        // Botão principal «Analisar agora»
+        // Botão principal «Limpeza profunda» em gradiente + atalho para Diagnóstico 1 clique
         NexusPrimaryGradientButton(
-            text = if (analysisState.isRunning) "A analisar..." else "Analisar agora",
-            enabled = !analysisState.isRunning,
-            onClick = onRunAnalysis,
+            text = "Limpeza profunda",
+            onClick = onStartDeepClean,
             modifier = Modifier.fillMaxWidth()
         )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            NexusChip(
+                text = if (analysisState.isRunning) "A analisar sistema..." else "Diagnóstico rápido (1 clique)",
+                color = colors.accent2,
+                onClick = { if (!analysisState.isRunning) onRunAnalysis() }
+            )
+        }
 
         // Progresso e resultados do fluxo «Analisar e corrigir com 1 clique» com animateContentSize e AnimatedVisibility
         AnimatedVisibility(

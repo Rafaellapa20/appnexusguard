@@ -127,6 +127,20 @@ data class CleanScanReport(
 )
 
 @Immutable
+data class DeepCleanCompletionResult(
+    val historyEntryId: Long,
+    val measuredFreedBytes: Long,
+    val beforeUsedBytes: Long,
+    val afterUsedBytes: Long,
+    val totalStorageBytes: Long,
+    val canRestore: Boolean,
+    val restoreUntilEpochMillis: Long,
+    val trashedUrisJson: String = "",
+    val removedFilesCount: Int = 0,
+    val removedEmptyFoldersCount: Int = 0
+)
+
+@Immutable
 data class ScanProgress(
     val isScanning: Boolean = false,
     val stepText: String = "",
@@ -1414,9 +1428,18 @@ class CleanerRepository @Inject constructor(
      */
     suspend fun deleteEmptyFoldersAndRecord(
         emptyFolders: List<String>,
-        trashedFiles: List<ScannedFileCandidate>
-    ) = withContext(Dispatchers.IO) {
+        trashedFiles: List<ScannedFileCandidate>,
+        beforeUsedStorageBytes: Long = 0L
+    ): DeepCleanCompletionResult = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
+        val statBefore = android.os.StatFs(Environment.getDataDirectory().path)
+        val totalStorage = statBefore.totalBytes
+        val effectiveBeforeUsed = if (beforeUsedStorageBytes > 0L) {
+            beforeUsedStorageBytes
+        } else {
+            (totalStorage - statBefore.availableBytes).coerceAtLeast(0L)
+        }
+
         var deletedFolders = 0
 
         // Ordena por comprimento decrescente para apagar subpastas primeiro (baixo para cima)
@@ -1467,12 +1490,22 @@ class CleanerRepository @Inject constructor(
 
         val contentSchemeCandidates = trashedFiles.filter { it.contentUri.startsWith("content://") }
         val effectiveTrashedFiles = contentSchemeCandidates + movedToNexusTrash.map { it.first }
-        val freedBytes = effectiveTrashedFiles.sumOf { it.sizeBytes }
+        val candidateSumBytes = effectiveTrashedFiles.sumOf { it.sizeBytes }
+
+        // Mede novamente o armazenamento real após a operação
+        val statAfter = android.os.StatFs(Environment.getDataDirectory().path)
+        val rawAfterUsed = (totalStorage - statAfter.availableBytes).coerceAtLeast(0L)
+        val measuredDelta = (effectiveBeforeUsed - rawAfterUsed).coerceAtLeast(0L)
+        val freedBytes = if (measuredDelta > 0L) measuredDelta else candidateSumBytes
+        val effectiveAfterUsed = (effectiveBeforeUsed - freedBytes).coerceAtLeast(0L)
+
         val urisJoined = effectiveTrashedFiles.joinToString("|") { it.contentUri }
 
         val canRestoreMediaStore = contentSchemeCandidates.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         val canRestoreNexusTrash = movedToNexusTrash.isNotEmpty()
         val canRestoreAny = canRestoreMediaStore || canRestoreNexusTrash
+        val restoreUntilMillis = now + THIRTY_DAYS_MILLIS
+        var insertedHistoryId = 0L
 
         if (effectiveTrashedFiles.isNotEmpty() || deletedFolders > 0) {
             val title = buildString {
@@ -1496,7 +1529,7 @@ class CleanerRepository @Inject constructor(
                     append("$deletedFolders pasta(s) vazia(s) removida(s)")
                 }
             }
-            val historyId = dao.insertHistory(
+            insertedHistoryId = dao.insertHistory(
                 HistoryEntity(
                     actionType = "CLEAN",
                     title = title,
@@ -1512,19 +1545,32 @@ class CleanerRepository @Inject constructor(
             if (movedToNexusTrash.isNotEmpty()) {
                 val trashEntities = movedToNexusTrash.map { (cand, destFile) ->
                     NexusTrashEntity(
-                        historyId = historyId,
+                        historyId = insertedHistoryId,
                         originalPath = Uri.parse(cand.contentUri).path ?: "",
                         trashFilePath = destFile.absolutePath,
                         displayName = cand.displayName,
                         sizeBytes = cand.sizeBytes,
                         trashedAtEpochMillis = now,
-                        expiresAtEpochMillis = now + THIRTY_DAYS_MILLIS,
+                        expiresAtEpochMillis = restoreUntilMillis,
                         isRestored = false
                     )
                 }
                 dao.insertNexusTrashItems(trashEntities)
             }
         }
+
+        DeepCleanCompletionResult(
+            historyEntryId = insertedHistoryId,
+            measuredFreedBytes = freedBytes,
+            beforeUsedBytes = effectiveBeforeUsed,
+            afterUsedBytes = effectiveAfterUsed,
+            totalStorageBytes = totalStorage,
+            canRestore = canRestoreAny,
+            restoreUntilEpochMillis = restoreUntilMillis,
+            trashedUrisJson = urisJoined,
+            removedFilesCount = effectiveTrashedFiles.size,
+            removedEmptyFoldersCount = deletedFolders
+        )
     }
 
     /**

@@ -120,6 +120,8 @@ dependencies {
 
     // Baseline Profile & ProfileInstaller
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.glance.material3)
     baselineProfile(project(":baselineprofile"))
 
     // Unit tests

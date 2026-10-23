@@ -1,5 +1,6 @@
 package com.nexusguard.android
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -17,11 +18,17 @@ import dagger.hilt.android.AndroidEntryPoint
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        const val EXTRA_START_DEEP_CLEAN = "extra_start_deep_clean"
+    }
+
     private val mainViewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
+
+        handleQuickCleanIntent(intent)
 
         splashScreen.setKeepOnScreenCondition {
             !mainViewModel.preferencesState.value.isLoaded
@@ -39,6 +46,18 @@ class MainActivity : ComponentActivity() {
                     NexusGuardMainScreen(viewModel = mainViewModel)
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleQuickCleanIntent(intent)
+    }
+
+    private fun handleQuickCleanIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_START_DEEP_CLEAN, false) == true) {
+            intent.removeExtra(EXTRA_START_DEEP_CLEAN)
+            mainViewModel.requestOpenDeepCleanFromShortcut()
         }
     }
 

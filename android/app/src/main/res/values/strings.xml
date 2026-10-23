@@ -7,4 +7,7 @@
     <string name="nav_system">Sistema</string>
     <string name="nav_history">Histórico</string>
     <string name="settings_title">Definições</string>
+    <string name="widget_2x2_desc">Nexus Guard 2×2 · Armazenamento livre, bateria e botão Analisar</string>
+    <string name="widget_4x2_desc">Nexus Guard 4×2 · Armazenamento livre, bateria com tempo restante e Limpeza profunda</string>
+    <string name="tile_quick_clean_label">Limpeza rápida</string>
 </resources>

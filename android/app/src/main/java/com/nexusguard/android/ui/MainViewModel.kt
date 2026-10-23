@@ -16,6 +16,7 @@ import com.nexusguard.android.data.repository.AppUpdaterRepository
 import com.nexusguard.android.data.repository.BatteryProfileManager
 import com.nexusguard.android.data.repository.CleanScanReport
 import com.nexusguard.android.data.repository.CleanerRepository
+import com.nexusguard.android.data.repository.DeepCleanCompletionResult
 import com.nexusguard.android.data.repository.RealSystemSnapshot
 import com.nexusguard.android.data.repository.SystemSensorsRepository
 import com.nexusguard.android.domain.NexusFormatters
@@ -25,6 +26,7 @@ import com.nexusguard.android.service.BoostSessionState
 import com.nexusguard.android.service.ChargeMonitorForegroundService
 import com.nexusguard.android.service.GameBoostManager
 import com.nexusguard.android.util.PdfReportExporter
+import com.nexusguard.android.widget.NexusWidgetUpdater
 import com.nexusguard.android.worker.BatterySampleWorker
 import com.nexusguard.android.worker.SystemMonitorWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -121,6 +123,12 @@ class MainViewModel @Inject constructor(
     private val _cleanScanStepText = MutableStateFlow("")
     val cleanScanStepText: StateFlow<String> = _cleanScanStepText.asStateFlow()
 
+    private val _lastCompletionResult = MutableStateFlow<DeepCleanCompletionResult?>(null)
+    val lastCompletionResult: StateFlow<DeepCleanCompletionResult?> = _lastCompletionResult.asStateFlow()
+
+    private val _openDeepCleanEvent = MutableStateFlow(false)
+    val openDeepCleanEvent: StateFlow<Boolean> = _openDeepCleanEvent.asStateFlow()
+
     private val _analysisState = MutableStateFlow(OneClickAnalysisState())
     val analysisState: StateFlow<OneClickAnalysisState> = _analysisState.asStateFlow()
 
@@ -140,7 +148,8 @@ class MainViewModel @Inject constructor(
         cleanReportFlow = cleanReport,
         isScanningFlow = isScanningClean,
         scanStepFlow = cleanScanStepText,
-        scanProgressFlow = cleanerRepository.scanProgress
+        scanProgressFlow = cleanerRepository.scanProgress,
+        lastCompletionFlow = _lastCompletionResult
     ).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -240,6 +249,20 @@ class MainViewModel @Inject constructor(
      */
     fun onEnterCleanTab() {
         refreshCleanScan(force = false)
+    }
+
+    fun requestOpenDeepCleanFromShortcut() {
+        _lastCompletionResult.value = null
+        _openDeepCleanEvent.value = true
+        refreshCleanScan(force = true)
+    }
+
+    fun consumeOpenDeepCleanEvent() {
+        _openDeepCleanEvent.value = false
+    }
+
+    fun dismissCompletionScreen() {
+        _lastCompletionResult.value = null
     }
 
     fun refreshCleanScan(force: Boolean = true) {
@@ -440,13 +463,23 @@ class MainViewModel @Inject constructor(
         emptyFoldersToDelete: List<String>
     ) {
         viewModelScope.launch {
-            cleanerRepository.deleteEmptyFoldersAndRecord(
+            val result = cleanerRepository.deleteEmptyFoldersAndRecord(
                 emptyFolders = emptyFoldersToDelete,
                 trashedFiles = trashedFiles
             )
+            _lastCompletionResult.value = result
             refreshCleanScan(force = true)
             sensorsRepository.refreshSlowMetrics(force = true)
+            NexusWidgetUpdater.updateAllWidgets(appContext)
         }
+    }
+
+    fun buildRestoreFromCompletionIntentSender(result: DeepCleanCompletionResult): IntentSender? {
+        val uris = result.trashedUrisJson
+            .split("|")
+            .filter { it.isNotBlank() }
+            .mapNotNull { runCatching { Uri.parse(it) }.getOrNull() }
+        return cleanerRepository.buildTrashIntentSender(uris, moveToTrash = false)
     }
 
     fun buildRestoreFromTrashIntentSender(entry: HistoryEntity): IntentSender? {

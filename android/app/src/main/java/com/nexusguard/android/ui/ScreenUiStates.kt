@@ -6,6 +6,7 @@ import com.nexusguard.android.data.local.ChargingSessionEntity
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.preferences.UserPreferencesState
 import com.nexusguard.android.data.repository.CleanScanReport
+import com.nexusguard.android.data.repository.DeepCleanCompletionResult
 import com.nexusguard.android.data.repository.InstalledAppUsageInfo
 import com.nexusguard.android.data.repository.LiveBatteryMetrics
 import com.nexusguard.android.data.repository.LiveStorageMetrics
@@ -87,7 +88,8 @@ data class CleanUiState(
     ),
     val isScanning: Boolean = false,
     val scanStepText: String = "",
-    val scanProgress: ScanProgress = ScanProgress()
+    val scanProgress: ScanProgress = ScanProgress(),
+    val lastCompletionResult: DeepCleanCompletionResult? = null
 )
 
 @Immutable
@@ -193,26 +195,31 @@ object ScreenUiStateMappers {
         cleanReportFlow: Flow<CleanScanReport>,
         isScanningFlow: Flow<Boolean>,
         scanStepFlow: Flow<String>,
-        scanProgressFlow: Flow<ScanProgress> = kotlinx.coroutines.flow.flowOf(ScanProgress())
+        scanProgressFlow: Flow<ScanProgress> = kotlinx.coroutines.flow.flowOf(ScanProgress()),
+        lastCompletionFlow: Flow<DeepCleanCompletionResult?> = kotlinx.coroutines.flow.flowOf(null)
     ): Flow<CleanUiState> {
-        val storageOnlyFlow = snapshotFlow
-            .map { it.isLoading to it.storage }
-            .distinctUntilChanged()
+        val storageAndScanFlow = combine(
+            snapshotFlow.map { it.isLoading to it.storage }.distinctUntilChanged(),
+            isScanningFlow,
+            scanStepFlow
+        ) { (isLoading, storage), scanning, stepText ->
+            Triple(isLoading to storage, scanning, stepText)
+        }
 
         return combine(
-            storageOnlyFlow,
+            storageAndScanFlow,
             cleanReportFlow,
-            isScanningFlow,
-            scanStepFlow,
-            scanProgressFlow
-        ) { (isLoading, storage), report, scanning, stepText, progress ->
+            scanProgressFlow,
+            lastCompletionFlow
+        ) { (loadingAndStorage, scanning, stepText), report, progress, completion ->
             CleanUiState(
-                isLoading = isLoading,
-                storage = storage,
+                isLoading = loadingAndStorage.first,
+                storage = loadingAndStorage.second,
                 cleanReport = report,
                 isScanning = scanning,
                 scanStepText = stepText,
-                scanProgress = progress
+                scanProgress = progress,
+                lastCompletionResult = completion
             )
         }.distinctUntilChanged()
     }

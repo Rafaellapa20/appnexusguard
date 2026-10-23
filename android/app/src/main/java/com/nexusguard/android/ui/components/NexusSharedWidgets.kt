@@ -171,7 +171,8 @@ private fun drawableToBitmapInIo(drawable: Drawable, targetPx: Int): Bitmap? {
 fun FileThumbnailOrTypeBadge(
     contentUri: String,
     mimeType: String,
-    displayName: String
+    displayName: String,
+    sizeDp: Int = 40
 ) {
     val context = LocalContext.current
     val colors = NexusTheme.colors
@@ -203,7 +204,7 @@ fun FileThumbnailOrTypeBadge(
             contentDescription = displayName,
             contentScale = ContentScale.Crop,
             modifier = Modifier
-                .size(40.dp)
+                .size(sizeDp.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .border(1.dp, colors.border, RoundedCornerShape(8.dp))
         )
@@ -217,7 +218,7 @@ fun FileThumbnailOrTypeBadge(
         }
         Box(
             modifier = Modifier
-                .size(40.dp)
+                .size(sizeDp.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(colors.bgRaised)
                 .border(1.dp, colors.border, RoundedCornerShape(8.dp)),

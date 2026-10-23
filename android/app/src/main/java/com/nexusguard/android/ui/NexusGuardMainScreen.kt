@@ -68,6 +68,7 @@ fun NexusGuardMainScreen(
     val preferences by viewModel.preferencesState.collectAsStateWithLifecycle()
     val boostSession by viewModel.boostSession.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+    val openDeepCleanEvent by viewModel.openDeepCleanEvent.collectAsStateWithLifecycle()
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -103,6 +104,21 @@ fun NexusGuardMainScreen(
     val currentRoute = navBackStackEntry?.destination?.route ?: NexusTab.HOME.route
     val currentTab = NexusTab.entries.find { it.route == currentRoute }
     val colors = NexusTheme.colors
+
+    LaunchedEffect(openDeepCleanEvent) {
+        if (openDeepCleanEvent) {
+            viewModel.consumeOpenDeepCleanEvent()
+            if (currentRoute != NexusTab.CLEAN.route) {
+                navController.navigate(NexusTab.CLEAN.route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+        }
+    }
 
     val showBottomBar = currentRoute in NexusTab.entries.map { it.route }
 
@@ -255,6 +271,9 @@ fun NexusGuardMainScreen(
                 val homeUiState by viewModel.homeUiState.collectAsStateWithLifecycle()
                 HomeScreen(
                     uiState = homeUiState,
+                    onStartDeepClean = {
+                        viewModel.requestOpenDeepCleanFromShortcut()
+                    },
                     onRunAnalysis = viewModel::runOneClickAnalysis,
                     onApplySafeFixes = viewModel::applyAutomaticFixes,
                     onOpenBattery = { navController.navigate(NexusTab.BATTERY.route) },
@@ -274,7 +293,10 @@ fun NexusGuardMainScreen(
                     onCancelScan = viewModel::cancelCleanScan,
                     onAppCacheCleared = viewModel::onAppCacheClearFinished,
                     buildTrashIntent = viewModel::buildMoveToTrashIntentSender,
-                    onTrashConfirmed = viewModel::onTrashRequestConfirmed
+                    onTrashConfirmed = viewModel::onTrashRequestConfirmed,
+                    onDismissCompletion = viewModel::dismissCompletionScreen,
+                    buildRestoreCompletionIntent = viewModel::buildRestoreFromCompletionIntentSender,
+                    onRestoreConfirmed = viewModel::onRestoreConfirmed
                 )
             }
             composable(NexusTab.GAMES.route) {

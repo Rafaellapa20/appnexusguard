@@ -3,7 +3,9 @@ package com.nexusguard.android.worker
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -14,11 +16,14 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.nexusguard.android.MainActivity
 import com.nexusguard.android.R
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.data.preferences.UserPreferencesRepository
+import com.nexusguard.android.data.repository.CleanerRepository
 import com.nexusguard.android.data.repository.SystemSensorsRepository
+import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.ThermalLevelPt
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -30,6 +35,7 @@ class SystemMonitorWorker @AssistedInject constructor(
     @Assisted private val appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val sensorsRepository: SystemSensorsRepository,
+    private val cleanerRepository: CleanerRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val dao: NexusGuardDao
 ) : CoroutineWorker(appContext, workerParams) {
@@ -39,12 +45,15 @@ class SystemMonitorWorker @AssistedInject constructor(
         val prefs = preferencesRepository.preferencesFlow.first()
         val snapshot = sensorsRepository.readCurrentSnapshot()
 
-        // Regista análise periódica no Histórico
+        // Fase 3 (5): Limpeza agendada semanal — só analisa e notifica («2,3 GB prontos a limpar»). Nunca apaga sem confirmação.
+        val cleanReport = cleanerRepository.scanRealDeviceStorage()
+        val cleanableBytes = cleanReport.totalCleanableBytes
+
         dao.insertHistory(
             HistoryEntity(
                 actionType = "ANALYSIS",
-                title = "Análise automática · Saúde ${snapshot.healthScore}/100",
-                details = "Térmico: ${snapshot.thermal.level.labelPt} · Bateria: ${snapshot.battery.levelPercent}%",
+                title = "Análise semanal · Saúde ${snapshot.healthScore}/100",
+                details = "Pronto a limpar: ${NexusFormatters.formatBytes(cleanableBytes)} · Térmico: ${snapshot.thermal.level.labelPt}",
                 timestampEpochMillis = System.currentTimeMillis()
             )
         )
@@ -54,6 +63,30 @@ class SystemMonitorWorker @AssistedInject constructor(
         }
 
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val openCleanIntent = Intent(appContext, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra(MainActivity.EXTRA_START_DEEP_CLEAN, true)
+        }
+        val pendingOpenClean = PendingIntent.getActivity(
+            appContext,
+            2000,
+            openCleanIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Notificação semanal de limpeza profunda (só análise)
+        if (prefs.weeklyScanEnabled && cleanableBytes > 0L) {
+            val formattedCleanable = NexusFormatters.formatBytes(cleanableBytes)
+            val weeklyNotif = NotificationCompat.Builder(appContext, CHANNEL_WEEKLY)
+                .setSmallIcon(R.drawable.ic_stat_gauge)
+                .setContentTitle("$formattedCleanable prontos a limpar")
+                .setContentText("A análise semanal terminou. Toca para rever e confirmar a Limpeza profunda.")
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setContentIntent(pendingOpenClean)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(2000, weeklyNotif)
+        }
 
         // 1. Alerta de armazenamento abaixo de 10%
         if (prefs.storageAlertEnabled && snapshot.storage.totalBytes > 0) {
@@ -64,6 +97,7 @@ class SystemMonitorWorker @AssistedInject constructor(
                     .setContentTitle("Armazenamento abaixo de 10 %")
                     .setContentText("Abre o Nexus Guard para pré-visualizar ficheiros grandes ou transferências antigas.")
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setContentIntent(pendingOpenClean)
                     .setAutoCancel(true)
                     .build()
                 nm.notify(2001, notif)
