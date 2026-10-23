@@ -1,6 +1,6 @@
 {
-  "versionCode": 5,
-  "versionName": "1.4.0",
+  "versionCode": 6,
+  "versionName": "1.5.0",
   "apkUrl": "https://raw.githubusercontent.com/Rafaellapa20/appnexusguard/main/NexusGuard-full-debug.apk",
-  "releaseNotes": "• Otimização profunda (Fases 1 a 6): sensores separados (rápidos vs. lentos) e zero consumo em repouso\n• Limpeza >3x mais rápida: filtros SQL no MediaStore + deteção de duplicados SHA-256 em 2 fases com cache Room\n• Gráficos de temperatura (60 s) e bateria (24 h) em Canvas único + ícones e miniaturas em LruCache\n• APK otimizado com R8 (reduzido de 21,6 MB para 2,14 MB — transferência instantânea!)"
+  "releaseNotes": "• Limpeza profunda (13 categorias reais): cache das apps, fotos semelhantes (dHash 64-bit), fotos desfocadas (Laplaciano), restos de apps desinstaladas e Lixo Nexus de 30 dias\n• Bateria avançada: taxa real de consumo (%/h) em ecrã ligado vs. repouso, perfil reversível «Poupança Nexus» e alarme de limite de carga (80 / 85 / 90 %)\n• Novo separador Apps: impacto detalhado em Bateria, Dados/Wi-Fi, Armazenamento (tendência em Room), Apps sem uso (30/60/90 d) e Desinstalação em lote\n• Ferramentas adicionais: otimizador de fotos (> 3 MB com EXIF preservado), área de transferência, vídeos grandes e relatório mensal exportável em PDF\n• Hibernação de apps (Full): fecho em lote via Shizuku (am force-stop instantâneo), Serviço de Acessibilidade ou modo Básico, com lista protegida automática e modo automático opcional"
 }

@@ -44,3 +44,9 @@
 -dontwarn kotlinx.coroutines.**
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+
+# Shizuku API (Fase 11 - apenas flavor full)
+-dontwarn rikka.shizuku.**
+-dontwarn moe.shizuku.**
+-keep class rikka.shizuku.** { *; }
+-keep class moe.shizuku.** { *; }
