@@ -248,7 +248,7 @@ fun Thermal60sCanvasChart(
     val textMeasurer = rememberTextMeasurer()
     val axisStyle = TextStyle(
         fontFamily = JetBrainsMonoFamily,
-        fontSize = 10.sp,
+        fontSize = 12.sp,
         color = colors.textMuted
     )
 
@@ -491,7 +491,7 @@ fun NexusToggleRow(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
+                checkedThumbColor = colors.text,
                 checkedTrackColor = colors.accent,
                 uncheckedThumbColor = colors.textDim,
                 uncheckedTrackColor = colors.surfaceAlt,

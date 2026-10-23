@@ -41,6 +41,7 @@ import com.nexusguard.android.ui.components.GaugeShieldLogo
 import com.nexusguard.android.ui.components.NexusCard
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.components.NexusSystemIntents
+import com.nexusguard.android.ui.components.NexusTextButton
 import com.nexusguard.android.ui.components.NexusToggleRow
 import com.nexusguard.android.ui.theme.NexusButtonShape
 import com.nexusguard.android.ui.theme.NexusIcons
@@ -238,7 +239,7 @@ private fun PermissionStatusRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
+            .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -248,11 +249,10 @@ private fun PermissionStatusRow(
             color = colors.textDim,
             modifier = Modifier.weight(1f)
         )
-        Text(
+        NexusTextButton(
             text = if (granted) "Concedida" else "Autorizar",
-            style = NexusMonoTextStyles.badge,
             color = if (granted) colors.ok else colors.accent2,
-            modifier = Modifier.clickable(onClick = onAction)
+            onClick = onAction
         )
     }
 }

@@ -1,10 +1,13 @@
 package com.nexusguard.android.ui.components
 
+import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +17,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -26,11 +28,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
@@ -48,6 +52,24 @@ import com.nexusguard.android.ui.theme.NexusCardShape
 import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
+
+/**
+ * Fase 6: Respeita Settings.Global.ANIMATOR_DURATION_SCALE em todas as animações (0 quando desligadas).
+ */
+@Composable
+fun rememberScaledAnimationDuration(baseDurationMs: Int): Int {
+    val context = LocalContext.current
+    return remember(context, baseDurationMs) {
+        val scale = runCatching {
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f
+            )
+        }.getOrDefault(1f)
+        if (scale <= 0f) 0 else (baseDurationMs * scale).toInt().coerceAtLeast(1)
+    }
+}
 
 @Composable
 fun GaugeShieldLogo(
@@ -149,20 +171,11 @@ fun NexusTopBar(
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (showHistoryAction) {
-                    Box(
-                        modifier = Modifier
-                            .defaultMinSize(minHeight = 48.dp)
-                            .clip(NexusBadgeShape)
-                            .clickable(role = Role.Button, onClick = onHistoryClick)
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Histórico",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.textDim
-                        )
-                    }
+                    NexusTextButton(
+                        text = "Histórico",
+                        color = colors.textDim,
+                        onClick = onHistoryClick
+                    )
                 }
                 if (showSettingsButton) {
                     IconButton(
@@ -207,7 +220,8 @@ fun NexusPrimaryGradientButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     leadingIcon: ImageVector? = null,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    contentSlot: (@Composable () -> Unit)? = null
 ) {
     val colors = NexusTheme.colors
     Box(
@@ -226,24 +240,142 @@ fun NexusPrimaryGradientButton(
             .padding(horizontal = 20.dp, vertical = 13.dp),
         contentAlignment = Alignment.Center
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            if (leadingIcon != null) {
-                Icon(
-                    imageVector = leadingIcon,
-                    contentDescription = null,
-                    tint = Color(0xFF0C0F16),
-                    modifier = Modifier.size(18.dp)
+        if (contentSlot != null) {
+            contentSlot()
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                if (leadingIcon != null) {
+                    Icon(
+                        imageVector = leadingIcon,
+                        contentDescription = null,
+                        tint = colors.onAccent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = colors.onAccent
                 )
-                Spacer(modifier = Modifier.width(8.dp))
             }
-            Text(
-                text = text,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                color = Color(0xFF0C0F16)
+        }
+    }
+}
+
+/**
+ * Fase 6: Botão de texto acessível com alvo de toque mínimo de 48 dp, Role.Button e indicação visual.
+ */
+@Composable
+fun NexusTextButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    color: Color = NexusTheme.colors.accent2
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clip(NexusBadgeShape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
+                role = Role.Button,
+                onClick = onClick
             )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = color
+        )
+    }
+}
+
+/**
+ * Fase 6: Chip clicável com alvo de toque mínimo de 48 dp, Role.Button e indicação visual.
+ */
+@Composable
+fun NexusChip(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    color: Color = NexusTheme.colors.accent2
+) {
+    val colors = NexusTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clip(NexusButtonShape)
+            .background(colors.surfaceAlt)
+            .border(1.dp, color.copy(alpha = 0.45f), NexusButtonShape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
+                role = Role.Button,
+                onClick = onClick
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = color
+        )
+    }
+}
+
+/**
+ * Fase 6: Checkbox da limpeza com área de toque de 48 dp e cor onAccent do NexusTheme.
+ */
+@Composable
+fun NexusCheckbox48dp(
+    checked: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = NexusTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
+                role = Role.Checkbox,
+                onClick = onToggle
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (checked) colors.accent2 else Color.Transparent)
+                .border(
+                    width = 1.5.dp,
+                    color = if (checked) colors.accent2 else colors.borderStrong,
+                    shape = RoundedCornerShape(6.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (checked) {
+                Icon(
+                    imageVector = NexusIcons.Check,
+                    contentDescription = null,
+                    tint = colors.onAccent,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
         }
     }
 }
@@ -259,6 +391,7 @@ fun NexusCard(
 ) {
     val cardModifier = if (onClick != null) {
         modifier
+            .defaultMinSize(minHeight = 48.dp)
             .clip(NexusCardShape)
             .clickable(role = Role.Button, onClick = onClick)
     } else {

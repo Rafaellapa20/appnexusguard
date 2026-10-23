@@ -1,5 +1,17 @@
 package com.nexusguard.android.ui.home
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,8 +35,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +44,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -42,8 +55,11 @@ import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.ui.HomeUiState
 import com.nexusguard.android.ui.components.NexusCard
+import com.nexusguard.android.ui.components.NexusChip
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.components.NexusSystemIntents
+import com.nexusguard.android.ui.components.NexusTextButton
+import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 import java.util.Locale
@@ -61,13 +77,38 @@ fun HomeScreen(
     val colors = NexusTheme.colors
     val context = LocalContext.current
     val isLoading = uiState.isLoading
-    val score = uiState.healthScore
-    val ringStatusColor = when {
+    val targetScore = if (isLoading) 0 else uiState.healthScore
+    val animDuration = rememberScaledAnimationDuration(650)
+
+    val animatedScore by animateIntAsState(
+        targetValue = targetScore,
+        animationSpec = tween(durationMillis = animDuration),
+        label = "healthScoreInt"
+    )
+
+    val targetRingStatusColor = when {
         isLoading -> colors.textDim
-        score >= 80 -> colors.ok
-        score >= 60 -> colors.warn
+        uiState.healthScore >= 80 -> colors.ok
+        uiState.healthScore >= 60 -> colors.warn
         else -> colors.danger
     }
+    val ringStatusColor by animateColorAsState(
+        targetValue = targetRingStatusColor,
+        animationSpec = tween(durationMillis = rememberScaledAnimationDuration(350)),
+        label = "ringStatusColor"
+    )
+
+    val shimmerDuration = rememberScaledAnimationDuration(1100)
+    val infiniteTransition = rememberInfiniteTransition(label = "ringShimmer")
+    val shimmerAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = if (shimmerDuration > 0) 0.85f else 0.5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = shimmerDuration.coerceAtLeast(300), easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "shimmerAlpha"
+    )
 
     val freeGbText = if (isLoading) "—" else NexusFormatters.formatBytes(uiState.storage.freeBytes)
     val totalGbText = if (isLoading) "—" else NexusFormatters.formatBytes(uiState.storage.totalBytes)
@@ -83,6 +124,7 @@ fun HomeScreen(
         1f
     }
     val storageDotColor = when {
+        isLoading -> colors.textMuted
         freeRatio < 0.10f -> colors.danger
         freeRatio < 0.20f -> colors.warn
         else -> colors.ok
@@ -90,7 +132,7 @@ fun HomeScreen(
 
     val tempText = uiState.battery.temperatureCelsius?.let {
         String.format(Locale("pt", "PT"), "%.1f °C", it)
-    } ?: "N/D"
+    } ?: "Indisponível (sensor não reportado)"
     val batteryDotColor = if (uiState.battery.isHealthy && (uiState.battery.temperatureCelsius ?: 30f) < 40f) {
         colors.ok
     } else {
@@ -104,7 +146,11 @@ fun HomeScreen(
     }
 
     val unusedValueText = if (isLoading) "—" else uiState.unusedAppsCount.toString()
-    val unusedSubtitleText = if (isLoading) "A ler apps..." else "> 30 dias (${uiState.installedAppsCount} apps)"
+    val unusedSubtitleText = when {
+        isLoading -> "A ler apps..."
+        !uiState.hasUsageStatsPermission -> "Sem UsageStats (${uiState.installedAppsCount} apps)"
+        else -> "> 30 dias (${uiState.installedAppsCount} apps)"
+    }
     val analysisState = uiState.analysisState
 
     Column(
@@ -114,7 +160,7 @@ fun HomeScreen(
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Anel grande de Saúde (0-100) medido de verdade
+        // Anel grande de Saúde (0-100): Brush.sweepGradient (Accent -> Accent2) rodado a -90°
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -125,9 +171,13 @@ fun HomeScreen(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.size(164.dp)
             ) {
-                val trackColor = colors.surfaceAlt
-                val ringBrush = Brush.linearGradient(
-                    colors = listOf(colors.accent2, colors.accent)
+                val trackColor = if (isLoading) {
+                    colors.surfaceAlt.copy(alpha = shimmerAlpha)
+                } else {
+                    colors.surfaceAlt
+                }
+                val sweepBrush = Brush.sweepGradient(
+                    colors = listOf(colors.accent, colors.accent2, colors.accent)
                 )
                 Canvas(modifier = Modifier.size(150.dp)) {
                     drawArc(
@@ -138,18 +188,30 @@ fun HomeScreen(
                         style = Stroke(width = 13.dp.toPx(), cap = StrokeCap.Round)
                     )
                     if (!isLoading) {
-                        drawArc(
-                            brush = ringBrush,
-                            startAngle = -90f,
-                            sweepAngle = 360f * (score / 100f),
-                            useCenter = false,
-                            style = Stroke(width = 13.dp.toPx(), cap = StrokeCap.Round)
-                        )
+                        rotate(degrees = -90f) {
+                            drawArc(
+                                brush = sweepBrush,
+                                startAngle = 0f,
+                                sweepAngle = 360f * (animatedScore / 100f),
+                                useCenter = false,
+                                style = Stroke(width = 13.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                        }
+                    } else {
+                        rotate(degrees = -90f) {
+                            drawArc(
+                                color = colors.borderStrong.copy(alpha = shimmerAlpha),
+                                startAngle = 0f,
+                                sweepAngle = 90f,
+                                useCenter = false,
+                                style = Stroke(width = 13.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                        }
                     }
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = if (isLoading) "—" else score.toString(),
+                        text = if (isLoading) "—" else animatedScore.toString(),
                         style = NexusMonoTextStyles.metricHero.copy(fontSize = 42.sp),
                         color = colors.text
                     )
@@ -177,9 +239,16 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        // Progresso e resultados do fluxo «Analisar e corrigir com 1 clique»
-        if (analysisState.isRunning || analysisState.completedOnce) {
+        // Progresso e resultados do fluxo «Analisar e corrigir com 1 clique» com animateContentSize e AnimatedVisibility
+        AnimatedVisibility(
+            visible = analysisState.isRunning || analysisState.completedOnce,
+            enter = fadeIn(tween(rememberScaledAnimationDuration(180))),
+            exit = fadeOut(tween(rememberScaledAnimationDuration(150)))
+        ) {
             NexusCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .animateContentSize(animationSpec = tween(rememberScaledAnimationDuration(220))),
                 backgroundColor = colors.surface,
                 borderColor = colors.borderStrong,
                 contentPadding = PaddingValues(14.dp)
@@ -206,17 +275,16 @@ fun HomeScreen(
                         Text(
                             text = "Diagnóstico e Correções",
                             style = MaterialTheme.typography.titleMedium,
-                            color = colors.text
+                            color = colors.text,
+                            modifier = Modifier.weight(1f)
                         )
                         val autoFixes = analysisState.proposedFixes.count { !it.requiresSystemConfirmation && !it.isResolved }
                         if (autoFixes > 0) {
-                            TextButton(onClick = onApplySafeFixes) {
-                                Text(
-                                    text = "Corrigir tudo ($autoFixes)",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = colors.accent2
-                                )
-                            }
+                            NexusChip(
+                                text = "Corrigir tudo ($autoFixes)",
+                                color = colors.accent2,
+                                onClick = onApplySafeFixes
+                            )
                         }
                     }
 
@@ -229,61 +297,62 @@ fun HomeScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    analysisState.proposedFixes.forEach { fix ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = fix.title,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                    color = if (fix.isResolved) colors.textMuted else colors.text
-                                )
-                                Text(
-                                    text = fix.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = colors.textDim
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            when {
-                                fix.isResolved -> {
-                                    Text(
-                                        text = "Resolvido",
-                                        style = NexusMonoTextStyles.badge,
-                                        color = colors.ok
-                                    )
-                                }
-                                !fix.requiresSystemConfirmation -> {
-                                    TextButton(onClick = onApplySafeFixes) {
+                    AnimatedVisibility(
+                        visible = analysisState.proposedFixes.isNotEmpty(),
+                        enter = fadeIn(tween(rememberScaledAnimationDuration(180))),
+                        exit = fadeOut(tween(rememberScaledAnimationDuration(150)))
+                    ) {
+                        Column(modifier = Modifier.padding(top = 8.dp)) {
+                            analysisState.proposedFixes.forEach { fix ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "Corrigir",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = colors.accent2
+                                            text = fix.title,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                            color = if (fix.isResolved) colors.textMuted else colors.text
+                                        )
+                                        Text(
+                                            text = fix.subtitle,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.textDim
                                         )
                                     }
-                                }
-                                else -> {
-                                    TextButton(
-                                        onClick = {
-                                            when (fix.actionRouteOrType) {
-                                                "OPEN_CLEAN" -> onOpenClean()
-                                                "OPEN_SYSTEM" -> onOpenSystem()
-                                                "OPEN_USAGE_PERM" -> NexusSystemIntents.openUsageAccessSettings(context)
-                                                "OPEN_MEDIA_PERM" -> onOpenClean()
-                                            }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    when {
+                                        fix.isResolved -> {
+                                            Text(
+                                                text = "Resolvido",
+                                                style = NexusMonoTextStyles.badge,
+                                                color = colors.ok
+                                            )
                                         }
-                                    ) {
-                                        Text(
-                                            text = "Ação necessária →",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = colors.warn
-                                        )
+                                        !fix.requiresSystemConfirmation -> {
+                                            NexusTextButton(
+                                                text = "Corrigir",
+                                                color = colors.accent2,
+                                                onClick = onApplySafeFixes
+                                            )
+                                        }
+                                        else -> {
+                                            NexusTextButton(
+                                                text = "Ação necessária →",
+                                                color = colors.warn,
+                                                onClick = {
+                                                    when (fix.actionRouteOrType) {
+                                                        "OPEN_CLEAN" -> onOpenClean()
+                                                        "OPEN_SYSTEM" -> onOpenSystem()
+                                                        "OPEN_USAGE_PERM" -> NexusSystemIntents.openUsageAccessSettings(context)
+                                                        "OPEN_MEDIA_PERM" -> onOpenClean()
+                                                    }
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -459,7 +528,7 @@ private fun RecentActionRow(
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = timeLabel,
-            style = MaterialTheme.typography.bodySmall,
+            style = NexusMonoTextStyles.metricSmall,
             color = colors.textMuted
         )
     }

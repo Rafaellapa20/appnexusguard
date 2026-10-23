@@ -1,7 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "1.3.0-full",
+  "versionCode": 5,
+  "versionName": "1.4.0",
   "apkUrl": "https://raw.githubusercontent.com/Rafaellapa20/appnexusguard/main/NexusGuard-full-debug.apk",
-  "releaseNotes": "• Funciona a 100 % sem precisar de ativar «Dados de utilização» (lê tamanho real das APKs, splits, libs nativas e apps sem uso diretamente pelo PackageManager)\n• Botão de 1 clique para abrir diretamente a página do Nexus Guard caso queiras desbloquear as Definições Restritas\n• Todos os cartões de Início, Bateria e Sistema desbloqueados imediatamente",
-  "publishedAt": "23/10/2026"
+  "releaseNotes": "• Otimização profunda (Fases 1 a 6): sensores separados (rápidos vs. lentos) e zero consumo em repouso\n• Limpeza >3x mais rápida: filtros SQL no MediaStore + deteção de duplicados SHA-256 em 2 fases com cache Room\n• Gráficos de temperatura (60 s) e bateria (24 h) em Canvas único + ícones e miniaturas em LruCache\n• APK otimizado com R8 (reduzido de 21,6 MB para 2,14 MB — transferência instantânea!)"
 }

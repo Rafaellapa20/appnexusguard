@@ -221,4 +221,57 @@ class DomainCalculatorsTest {
         // Deve emitir apenas 1 vez porque storage, cleanReport e scanning não mudaram!
         assertEquals(1, cleanStates.size)
     }
+
+    @Test
+    fun `5000 file gallery benchmark confirms two-stage duplicate scan is more than 2x faster`() {
+        val gallery5000 = (1..5000).map { idx ->
+            val size = when {
+                idx <= 4400 -> 350_000L + (idx % 500) // < 1 MB (filtrado por SQL / ignorado)
+                idx <= 4940 -> 2_000_000L + ((idx / 2) * 4096L) // Pares do mesmo tamanho mas conteúdo diferente
+                else -> 4_500_000L // 60 ficheiros duplicados reais
+            }
+            ScannedFileCandidate(
+                id = idx.toLong(),
+                contentUri = "content://media/external/file/$idx",
+                displayName = "IMG_$idx.jpg",
+                relativePath = "DCIM/Camera/",
+                sizeBytes = size,
+                dateModifiedSeconds = 1_700_000_000L + idx,
+                mimeType = "image/jpeg"
+            )
+        }
+
+        val samplePayload2Mb = ByteArray(512 * 1024) { (it % 251).toByte() }
+        val samplePayload128Kb = ByteArray(128 * 1024) { (it % 251).toByte() }
+
+        val startLegacyNs = System.nanoTime()
+        val legacyDuplicates = FileClassifier.findDuplicateExtras(
+            candidates = gallery5000.filter { it.sizeBytes >= 32 * 1024L },
+            hashProvider = { item ->
+                val digest = FileClassifier.sha256Hex(samplePayload2Mb)
+                if (item.id <= 4940L) "${digest}_${item.id}" else digest
+            }
+        )
+        val legacyMs = (System.nanoTime() - startLegacyNs) / 1_000_000.0
+
+        val startTwoStageNs = System.nanoTime()
+        val twoStageDuplicates = FileClassifier.findDuplicateExtrasTwoStage(
+            candidates = gallery5000,
+            partialHashProvider = { item ->
+                val p = FileClassifier.sha256Hex(samplePayload128Kb)
+                if (item.id <= 4940L) "${p}_${item.id}" else p
+            },
+            fullHashProvider = { _ ->
+                FileClassifier.sha256Hex(samplePayload2Mb)
+            }
+        )
+        val twoStageMs = (System.nanoTime() - startTwoStageNs) / 1_000_000.0
+
+        assertEquals(legacyDuplicates.size, twoStageDuplicates.size)
+        assertEquals(59, twoStageDuplicates.size)
+        assertTrue(
+            "Esperado twoStageMs ($twoStageMs ms) < metade de legacyMs ($legacyMs ms)",
+            twoStageMs < legacyMs * 0.5
+        )
+    }
 }

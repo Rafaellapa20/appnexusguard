@@ -17,6 +17,11 @@ val JetBrainsMonoFamily = FontFamily(
 
 val SystemSansFamily = FontFamily.SansSerif
 
+/**
+ * Fase 6: Mínimo de 12 sp em todo o texto.
+ * JetBrains Mono só para números (valores, tamanhos, tempos);
+ * texto e subtítulos em SystemSansFamily.
+ */
 val NexusTypography = Typography(
     headlineLarge = TextStyle(
         fontFamily = SystemSansFamily,
@@ -71,6 +76,12 @@ val NexusTypography = Typography(
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
         lineHeight = 16.sp
+    ),
+    labelSmall = TextStyle(
+        fontFamily = SystemSansFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        lineHeight = 16.sp
     )
 )
 
@@ -102,7 +113,7 @@ object NexusMonoTextStyles {
     val badge = TextStyle(
         fontFamily = JetBrainsMonoFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 11.sp,
-        lineHeight = 14.sp
+        fontSize = 12.sp,
+        lineHeight = 16.sp
     )
 }

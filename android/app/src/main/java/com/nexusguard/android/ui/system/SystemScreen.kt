@@ -1,7 +1,6 @@
 package com.nexusguard.android.ui.system
 
 import android.widget.Toast
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,8 +29,10 @@ import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.ui.SystemUiState
 import com.nexusguard.android.ui.components.AppIconOrMonogram
 import com.nexusguard.android.ui.components.NexusCard
+import com.nexusguard.android.ui.components.NexusChip
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.components.NexusSystemIntents
+import com.nexusguard.android.ui.components.NexusTextButton
 import com.nexusguard.android.ui.components.Thermal60sCanvasChart
 import com.nexusguard.android.ui.theme.NexusButtonShape
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
@@ -50,7 +51,7 @@ fun SystemScreen(
     val isLoading = uiState.isLoading
     val tempLabel = uiState.batteryTempCelsius?.let {
         String.format(Locale("pt", "PT"), "%.1f °C", it)
-    } ?: "N/D"
+    } ?: "Indisponível"
     val availRamGb = if (isLoading) "—" else NexusFormatters.formatBytes(uiState.availableRamBytes)
     val totalRamGb = if (isLoading) "—" else NexusFormatters.formatBytes(uiState.totalRamBytes)
 
@@ -119,11 +120,10 @@ fun SystemScreen(
                     }
                     if (BuildConfig.IS_FULL_FLAVOR) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
+                        NexusChip(
                             text = "Limpar fundo",
-                            style = NexusMonoTextStyles.badge,
                             color = colors.accent2,
-                            modifier = Modifier.clickable {
+                            onClick = {
                                 onStopPermittedBackground { count ->
                                     Toast.makeText(
                                         context,
@@ -160,7 +160,9 @@ fun SystemScreen(
                     OutlinedButton(
                         onClick = { NexusSystemIntents.openAppDetailsSettings(context, context.packageName) },
                         shape = NexusButtonShape,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
                     ) {
                         Text(
                             text = "1.º Abrir Info da App (tocar em ⋮ Mais → Permitir)",
@@ -196,7 +198,7 @@ fun SystemScreen(
             NexusCard(
                 backgroundColor = colors.surface,
                 borderColor = colors.border,
-                contentPadding = PaddingValues(12.dp)
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -236,24 +238,22 @@ fun SystemScreen(
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
+                    NexusTextButton(
                         text = "Parar / Bateria",
-                        style = NexusMonoTextStyles.badge,
                         color = colors.accent2,
-                        modifier = Modifier.clickable {
+                        onClick = {
                             NexusSystemIntents.openAppDetailsSettings(context, app.packageName)
                         }
                     )
-                    Text(
+                    NexusTextButton(
                         text = "Desinstalar",
-                        style = NexusMonoTextStyles.badge,
                         color = colors.danger,
-                        modifier = Modifier.clickable {
+                        onClick = {
                             NexusSystemIntents.requestUninstallPackage(context, app.packageName)
                         }
                     )

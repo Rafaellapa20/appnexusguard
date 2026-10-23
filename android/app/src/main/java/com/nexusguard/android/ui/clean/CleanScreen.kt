@@ -8,17 +8,22 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,8 +42,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +54,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -63,13 +71,17 @@ import com.nexusguard.android.domain.ScannedFileCandidate
 import com.nexusguard.android.ui.CleanUiState
 import com.nexusguard.android.ui.components.FileThumbnailOrTypeBadge
 import com.nexusguard.android.ui.components.NexusCard
+import com.nexusguard.android.ui.components.NexusCheckbox48dp
+import com.nexusguard.android.ui.components.NexusChip
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.components.NexusSystemIntents
+import com.nexusguard.android.ui.components.NexusTextButton
+import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
 import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CleanScreen(
     uiState: CleanUiState,
@@ -194,7 +206,7 @@ fun CleanScreen(
                                 ) {
                                     Text(
                                         text = folderPath,
-                                        style = NexusMonoTextStyles.metricSmall,
+                                        style = MaterialTheme.typography.bodySmall,
                                         color = colors.text
                                     )
                                 }
@@ -203,7 +215,11 @@ fun CleanScreen(
                     }
                 } else if (group.files.isEmpty()) {
                     Text(
-                        text = "Nenhum ficheiro encontrado nesta categoria.",
+                        text = if (!cleanReport.hasMediaPermission) {
+                            "Permissão de leitura de ficheiros não concedida."
+                        } else {
+                            "Nenhum ficheiro encontrado nesta categoria."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.textMuted,
                         modifier = Modifier.padding(vertical = 16.dp)
@@ -252,7 +268,7 @@ fun CleanScreen(
                 .padding(horizontal = 18.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Cartão de Armazenamento Real (StatFs + StorageStatsManager)
+            // Cartão de Armazenamento Real (StatFs + StorageStatsManager) com proporções reais + mínimo visual de 2 dp e FlowRow
             NexusCard(
                 backgroundColor = colors.surface,
                 borderColor = colors.border,
@@ -270,15 +286,16 @@ fun CleanScreen(
                             "${NexusFormatters.formatBytes(storage.usedBytes)} usados de ${NexusFormatters.formatBytes(storage.totalBytes)}"
                         },
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                        color = colors.text
+                        color = colors.text,
+                        modifier = Modifier.weight(1f)
                     )
                     IconButton(
                         onClick = onRefreshScan,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                     ) {
                         if (isScanning) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(18.dp),
                                 strokeWidth = 2.dp,
                                 color = colors.accent2
                             )
@@ -293,7 +310,7 @@ fun CleanScreen(
                 }
 
                 if (isScanning && uiState.scanStepText.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = uiState.scanStepText,
                         style = MaterialTheme.typography.bodySmall,
@@ -303,52 +320,40 @@ fun CleanScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                val totalSafe = storage.totalBytes.coerceAtLeast(1L).toFloat()
-                val appsW = (storage.appsAndSystemBytes / totalSafe).coerceIn(0.05f, 0.85f)
-                val photosW = (storage.photosBytes / totalSafe).coerceIn(0.02f, 0.50f)
-                val videosW = (storage.videosBytes / totalSafe).coerceIn(0.02f, 0.50f)
-                val freeW = (storage.freeBytes / totalSafe).coerceIn(0.05f, 0.85f)
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(10.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(colors.surfaceAlt)
-                ) {
-                    Box(modifier = Modifier.weight(appsW).fillMaxHeight().background(colors.accent))
-                    Box(modifier = Modifier.weight(photosW).fillMaxHeight().background(colors.accent2))
-                    Box(modifier = Modifier.weight(videosW).fillMaxHeight().background(colors.warn))
-                    Box(modifier = Modifier.weight(freeW).fillMaxHeight().background(colors.surfaceAlt))
-                }
+                ProportionalStorageBar(
+                    totalBytes = storage.totalBytes,
+                    appsBytes = storage.appsAndSystemBytes,
+                    photosBytes = storage.photosBytes,
+                    videosBytes = storage.videosBytes,
+                    cleanableBytes = cleanReport.totalCleanableBytes
+                )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     StorageLegendDot(
                         color = colors.accent,
-                        label = "Apps/Sist. ${NexusFormatters.formatBytes(storage.appsAndSystemBytes)}"
+                        label = if (uiState.isLoading) "Apps/Sist. —" else "Apps/Sist. ${NexusFormatters.formatBytes(storage.appsAndSystemBytes)}"
                     )
                     StorageLegendDot(
                         color = colors.accent2,
-                        label = "Fotos ${NexusFormatters.formatBytes(storage.photosBytes)}"
+                        label = if (uiState.isLoading) "Fotos —" else "Fotos ${NexusFormatters.formatBytes(storage.photosBytes)}"
                     )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                    StorageLegendDot(
+                        color = colors.ok,
+                        label = if (uiState.isLoading) "Vídeos —" else "Vídeos ${NexusFormatters.formatBytes(storage.videosBytes)}"
+                    )
                     StorageLegendDot(
                         color = colors.warn,
-                        label = "Vídeos ${NexusFormatters.formatBytes(storage.videosBytes)}"
+                        label = "Limpar ${NexusFormatters.formatBytes(cleanReport.totalCleanableBytes)}"
                     )
                     StorageLegendDot(
                         color = colors.textMuted,
-                        label = "Livre ${NexusFormatters.formatBytes(storage.freeBytes)}"
+                        label = if (uiState.isLoading) "Livre —" else "Livre ${NexusFormatters.formatBytes(storage.freeBytes)}"
                     )
                 }
             }
@@ -394,14 +399,14 @@ fun CleanScreen(
                 }
             }
 
-            // Lista das 6 categorias reais (tocar abre pré-visualização; caixa seleciona/desmarca)
+            // Lista das 6 categorias reais com chevron à direita e checkbox de 48 dp
             val displayCategories = if (cleanReport.categories.isNotEmpty()) {
                 cleanReport.categories
             } else {
                 CleanCategoryType.entries.map {
                     CleanCategoryGroup(
                         type = it,
-                        subtitlePt = it.emptySubtitlePt,
+                        subtitlePt = if (isScanning) "A analisar..." else it.emptySubtitlePt,
                         files = kotlinx.collections.immutable.persistentListOf(),
                         totalSizeBytes = 0L
                     )
@@ -413,6 +418,7 @@ fun CleanScreen(
                 CleanCategoryRealRow(
                     group = group,
                     isSelected = isSelected,
+                    isScanning = isScanning && cleanReport.categories.isEmpty(),
                     onToggleSelect = {
                         if (isSelected) {
                             selectedCategories.remove(group.type)
@@ -453,9 +459,12 @@ fun CleanScreen(
                                 color = colors.textDim
                             )
                         }
-                        TextButton(onClick = { NexusSystemIntents.openManageAllFilesSettings(context) }) {
-                            Text("Ativar", color = colors.accent2)
-                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        NexusChip(
+                            text = "Autorizar",
+                            color = colors.accent2,
+                            onClick = { NexusSystemIntents.openManageAllFilesSettings(context) }
+                        )
                     }
                 }
             }
@@ -479,57 +488,136 @@ fun CleanScreen(
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
+                NexusTextButton(
                     text = "Abrir →",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = colors.accent2
+                    color = colors.accent2,
+                    onClick = { NexusSystemIntents.openSystemClearCacheAction(context) }
                 )
             }
         }
 
-        // Barra fixa inferior «Mover para o Lixo · X MB»
-        Column(
+        // Barra fixa inferior com sombra e o total animado (AnimatedContent)
+        val animDuration = rememberScaledAnimationDuration(180)
+        Surface(
+            color = colors.bgRaised,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(colors.bg)
-                .padding(horizontal = 18.dp, vertical = 10.dp)
+                .shadow(elevation = 10.dp)
         ) {
-            NexusPrimaryGradientButton(
-                text = "Mover para o Lixo · $totalSelectedFormatted",
-                enabled = selectedFilesToTrash.isNotEmpty() || selectedEmptyFolders.isNotEmpty(),
-                onClick = {
-                    val intentSender = buildTrashIntent(selectedFilesToTrash)
-                    if (intentSender != null) {
-                        pendingTrashFiles = selectedFilesToTrash
-                        pendingEmptyFolders = selectedEmptyFolders
-                        trashIntentLauncher.launch(
-                            IntentSenderRequest.Builder(intentSender).build()
-                        )
-                    } else if (selectedEmptyFolders.isNotEmpty()) {
-                        onTrashConfirmed(emptyList(), selectedEmptyFolders)
-                        Toast.makeText(
-                            context,
-                            "${selectedEmptyFolders.size} pasta(s) vazia(s) removida(s).",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    } else {
-                        val firstGroup = cleanReport.categories.firstOrNull {
-                            it.type in selectedCategories && it.files.isNotEmpty()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 10.dp)
+            ) {
+                NexusPrimaryGradientButton(
+                    text = "Mover para o Lixo · $totalSelectedFormatted",
+                    enabled = selectedFilesToTrash.isNotEmpty() || selectedEmptyFolders.isNotEmpty(),
+                    onClick = {
+                        val intentSender = buildTrashIntent(selectedFilesToTrash)
+                        if (intentSender != null) {
+                            pendingTrashFiles = selectedFilesToTrash
+                            pendingEmptyFolders = selectedEmptyFolders
+                            trashIntentLauncher.launch(
+                                IntentSenderRequest.Builder(intentSender).build()
+                            )
+                        } else if (selectedEmptyFolders.isNotEmpty()) {
+                            onTrashConfirmed(emptyList(), selectedEmptyFolders)
+                            Toast.makeText(
+                                context,
+                                "${selectedEmptyFolders.size} pasta(s) vazia(s) removida(s).",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            val firstGroup = cleanReport.categories.firstOrNull {
+                                it.type in selectedCategories && it.files.isNotEmpty()
+                            }
+                            if (firstGroup != null) {
+                                previewCategory = firstGroup
+                            }
                         }
-                        if (firstGroup != null) {
-                            previewCategory = firstGroup
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    contentSlot = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "Mover para o Lixo · ",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = colors.onAccent
+                            )
+                            AnimatedContent(
+                                targetState = totalSelectedFormatted,
+                                transitionSpec = {
+                                    fadeIn(tween(animDuration)) togetherWith fadeOut(tween(animDuration))
+                                },
+                                label = "cleanTotalAnimated"
+                            ) { formattedTotal ->
+                                Text(
+                                    text = formattedTotal,
+                                    style = NexusMonoTextStyles.metricMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = colors.onAccent
+                                )
+                            }
                         }
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Toca numa categoria para pré-visualizar · Vai para o Lixo do sistema (30 dias)",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.textMuted,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
-            )
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Toca numa categoria para pré-visualizar · Vai para o Lixo do sistema (30 dias)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textMuted,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Fase 6: Barra de armazenamento com proporções reais (sem coerceIn mínimo artificial),
+ * aplicando apenas um mínimo visual de 2 dp aos segmentos maiores do que zero.
+ */
+@Composable
+private fun ProportionalStorageBar(
+    totalBytes: Long,
+    appsBytes: Long,
+    photosBytes: Long,
+    videosBytes: Long,
+    cleanableBytes: Long
+) {
+    val colors = NexusTheme.colors
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(colors.surfaceAlt)
+    ) {
+        if (totalBytes <= 0L) return@Canvas
+        val totalF = totalBytes.toFloat()
+        val minVisualPx = 2.dp.toPx()
+
+        val rawSegments = listOf(
+            appsBytes to colors.accent,
+            photosBytes to colors.accent2,
+            videosBytes to colors.ok,
+            cleanableBytes to colors.warn
+        )
+
+        var currentX = 0f
+        rawSegments.forEach { (bytes, segColor) ->
+            if (bytes > 0L && currentX < size.width) {
+                val rawWidth = (bytes.toFloat() / totalF) * size.width
+                val segWidth = rawWidth.coerceAtLeast(minVisualPx).coerceAtMost(size.width - currentX)
+                drawRect(
+                    color = segColor,
+                    topLeft = Offset(currentX, 0f),
+                    size = Size(segWidth, size.height)
+                )
+                currentX += segWidth
+            }
         }
     }
 }
@@ -538,49 +626,32 @@ fun CleanScreen(
 private fun CleanCategoryRealRow(
     group: CleanCategoryGroup,
     isSelected: Boolean,
+    isScanning: Boolean,
     onToggleSelect: () -> Unit,
     onOpenPreview: () -> Unit
 ) {
     val colors = NexusTheme.colors
-    val sizeText = if (group.type == CleanCategoryType.EMPTY_FOLDERS) {
-        "${group.emptyFoldersPaths.size}"
-    } else {
-        NexusFormatters.formatBytes(group.totalSizeBytes)
+    val sizeText = when {
+        isScanning -> "—"
+        group.type == CleanCategoryType.EMPTY_FOLDERS -> "${group.emptyFoldersPaths.size}"
+        else -> NexusFormatters.formatBytes(group.totalSizeBytes)
     }
 
     NexusCard(
         backgroundColor = colors.surface,
         borderColor = if (isSelected) colors.accent.copy(alpha = 0.65f) else colors.border,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
         onClick = onOpenPreview
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (isSelected) colors.accent2 else Color.Transparent)
-                    .border(
-                        width = 1.5.dp,
-                        color = if (isSelected) colors.accent2 else colors.borderStrong,
-                        shape = RoundedCornerShape(6.dp)
-                    )
-                    .clickable(role = Role.Checkbox, onClick = onToggleSelect),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isSelected) {
-                    Icon(
-                        imageVector = NexusIcons.Check,
-                        contentDescription = null,
-                        tint = Color(0xFF0C0F16),
-                        modifier = Modifier.size(15.dp)
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
+            NexusCheckbox48dp(
+                checked = isSelected,
+                onToggle = onToggleSelect
+            )
+            Spacer(modifier = Modifier.width(4.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = group.type.titlePt,
@@ -588,7 +659,7 @@ private fun CleanCategoryRealRow(
                     color = colors.text
                 )
                 Text(
-                    text = "${group.subtitlePt} · tocar p/ pré-visualizar",
+                    text = group.subtitlePt,
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textMuted
                 )
@@ -598,6 +669,13 @@ private fun CleanCategoryRealRow(
                 text = sizeText,
                 style = NexusMonoTextStyles.metricSmall,
                 color = colors.text
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Icon(
+                imageVector = NexusIcons.ChevronRight,
+                contentDescription = "Pré-visualizar ${group.type.titlePt}",
+                tint = colors.textMuted,
+                modifier = Modifier.size(20.dp)
             )
         }
     }
@@ -613,7 +691,7 @@ private fun FilePreviewRow(
     NexusCard(
         backgroundColor = colors.surface,
         borderColor = if (isChecked) colors.accent2.copy(alpha = 0.6f) else colors.border,
-        contentPadding = PaddingValues(10.dp),
+        contentPadding = PaddingValues(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         onClick = onToggle
     ) {
         Row(
@@ -642,24 +720,10 @@ private fun FilePreviewRow(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(22.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (isChecked) colors.accent2 else Color.Transparent)
-                    .border(1.5.dp, if (isChecked) colors.accent2 else colors.borderStrong, RoundedCornerShape(6.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isChecked) {
-                    Icon(
-                        imageVector = NexusIcons.Check,
-                        contentDescription = null,
-                        tint = Color(0xFF0C0F16),
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-            }
+            NexusCheckbox48dp(
+                checked = isChecked,
+                onToggle = onToggle
+            )
         }
     }
 }
@@ -671,7 +735,7 @@ private fun StorageLegendDot(
 ) {
     val colors = NexusTheme.colors
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
+        Spacer(
             modifier = Modifier
                 .size(7.dp)
                 .clip(CircleShape)

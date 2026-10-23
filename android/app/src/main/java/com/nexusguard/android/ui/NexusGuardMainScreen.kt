@@ -1,5 +1,8 @@
 package com.nexusguard.android.ui
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +46,7 @@ import androidx.navigation.compose.rememberNavController
 import com.nexusguard.android.ui.battery.BatteryScreen
 import com.nexusguard.android.ui.clean.CleanScreen
 import com.nexusguard.android.ui.components.NexusTopBar
+import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
 import com.nexusguard.android.ui.games.ActiveBoostScreen
 import com.nexusguard.android.ui.games.GamesScreen
 import com.nexusguard.android.ui.history.HistoryScreen
@@ -235,9 +239,14 @@ fun NexusGuardMainScreen(
             }
         }
     ) { innerPadding ->
+        val navFadeDuration = rememberScaledAnimationDuration(175)
         NavHost(
             navController = navController,
             startDestination = NexusTab.HOME.route,
+            enterTransition = { fadeIn(animationSpec = tween(navFadeDuration)) },
+            exitTransition = { fadeOut(animationSpec = tween(navFadeDuration)) },
+            popEnterTransition = { fadeIn(animationSpec = tween(navFadeDuration)) },
+            popExitTransition = { fadeOut(animationSpec = tween(navFadeDuration)) },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)

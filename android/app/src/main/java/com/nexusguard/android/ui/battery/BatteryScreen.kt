@@ -39,6 +39,7 @@ import com.nexusguard.android.data.local.BatterySampleEntity
 import com.nexusguard.android.ui.BatteryUiState
 import com.nexusguard.android.ui.components.Battery24hCanvasChart
 import com.nexusguard.android.ui.components.NexusCard
+import com.nexusguard.android.ui.components.NexusTextButton
 import com.nexusguard.android.ui.components.NexusToggleRow
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
@@ -59,7 +60,7 @@ fun BatteryScreen(
     val isLoading = uiState.isLoading
     val tempStr = bat.temperatureCelsius?.let {
         String.format(Locale("pt", "PT"), "%.1f °C", it)
-    } ?: "N/D"
+    } ?: "Indisponível"
 
     Column(
         modifier = Modifier
@@ -109,21 +110,24 @@ fun BatteryScreen(
                 label = "Saúde",
                 value = if (isLoading) "—" else bat.healthLabelPt,
                 subtitle = "BatteryManager",
-                valueColor = if (bat.isHealthy) colors.ok else colors.warn
+                valueColor = if (bat.isHealthy) colors.ok else colors.warn,
+                useMonoFont = false
             )
             MiniBatteryStatCard(
                 modifier = Modifier.weight(1f),
                 label = "Ciclos",
                 value = if (isLoading) "—" else bat.cycleCountText,
                 subtitle = bat.cycleCountReason,
-                valueColor = colors.text
+                valueColor = colors.text,
+                useMonoFont = true
             )
             MiniBatteryStatCard(
                 modifier = Modifier.weight(1f),
                 label = "Temp.",
                 value = if (isLoading) "—" else tempStr,
                 subtitle = if (isLoading) "A ler..." else "${bat.voltageMv} mV",
-                valueColor = colors.text
+                valueColor = colors.text,
+                useMonoFont = true
             )
         }
 
@@ -199,9 +203,9 @@ fun BatteryScreen(
         }
 
         NexusCard(
-            backgroundColor = Color(0xFF1F1B16),
+            backgroundColor = colors.warnSurface,
             borderColor = colors.warn.copy(alpha = 0.45f),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
             onClick = onViewBackgroundApps
         ) {
             Row(
@@ -221,20 +225,20 @@ fun BatteryScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isLoading) {
-                            "A verificar atividade de apps..."
-                        } else {
-                            "${uiState.highBackgroundAppsCount} app(s) ativas · ${uiState.unusedAppsCount} sem uso (>30d)"
+                        text = when {
+                            isLoading -> "A verificar atividade de apps..."
+                            !uiState.hasUsageStatsPermission -> "UsageStats opcional: ver apps instaladas e consumo"
+                            else -> "${uiState.highBackgroundAppsCount} app(s) ativas · ${uiState.unusedAppsCount} sem uso (>30d)"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.text
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
+                NexusTextButton(
                     text = "Ver",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = colors.warn
+                    color = colors.warn,
+                    onClick = onViewBackgroundApps
                 )
             }
         }
@@ -283,7 +287,8 @@ private fun MiniBatteryStatCard(
     label: String,
     value: String,
     subtitle: String,
-    valueColor: Color
+    valueColor: Color,
+    useMonoFont: Boolean
 ) {
     val colors = NexusTheme.colors
     NexusCard(
@@ -300,14 +305,18 @@ private fun MiniBatteryStatCard(
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = value,
-            style = NexusMonoTextStyles.metricMedium.copy(fontSize = 17.sp, fontWeight = FontWeight.Bold),
+            style = if (useMonoFont) {
+                NexusMonoTextStyles.metricMedium.copy(fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            } else {
+                MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            },
             color = valueColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         Text(
             text = subtitle,
-            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+            style = MaterialTheme.typography.bodySmall,
             color = colors.textMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

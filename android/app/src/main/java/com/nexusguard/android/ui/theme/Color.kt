@@ -21,6 +21,8 @@ data class NexusColorTokens(
     val ok: Color,
     val warn: Color,
     val danger: Color,
+    val onAccent: Color,
+    val warnSurface: Color,
     val isDark: Boolean
 ) {
     val primaryGradient: Brush
@@ -42,6 +44,8 @@ val DarkNexusColors = NexusColorTokens(
     ok = Color(0xFF34D399),
     warn = Color(0xFFFBBF24),
     danger = Color(0xFFF87171),
+    onAccent = Color(0xFF0C0F16),
+    warnSurface = Color(0xFF1F1B16),
     isDark = true
 )
 
@@ -60,6 +64,8 @@ val LightNexusColors = NexusColorTokens(
     ok = Color(0xFF10B981),
     warn = Color(0xFFD97706),
     danger = Color(0xFFEF4444),
+    onAccent = Color(0xFFFFFFFF),
+    warnSurface = Color(0xFFFEF3C7),
     isDark = false
 )
 
