@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -45,6 +43,7 @@ import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.components.NexusSystemIntents
 import com.nexusguard.android.ui.components.NexusToggleRow
 import com.nexusguard.android.ui.theme.NexusButtonShape
+import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 
@@ -215,7 +214,7 @@ fun SettingsScreen(
                 .defaultMinSize(minHeight = 48.dp)
         ) {
             Icon(
-                imageVector = Icons.Outlined.Info,
+                imageVector = NexusIcons.Info,
                 contentDescription = null,
                 tint = colors.accent2,
                 modifier = Modifier.size(18.dp)

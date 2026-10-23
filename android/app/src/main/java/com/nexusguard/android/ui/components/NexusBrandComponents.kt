@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +45,7 @@ import com.nexusguard.android.R
 import com.nexusguard.android.ui.theme.NexusBadgeShape
 import com.nexusguard.android.ui.theme.NexusButtonShape
 import com.nexusguard.android.ui.theme.NexusCardShape
+import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 
@@ -171,7 +170,7 @@ fun NexusTopBar(
                         modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Settings,
+                            imageVector = NexusIcons.Settings,
                             contentDescription = "Abrir Definições",
                             tint = colors.textDim
                         )

@@ -1,0 +1,10 @@
+HSPLcom/nexusguard/android/NexusGuardApp;-><init>()V
+HSPLcom/nexusguard/android/NexusGuardApp;->onCreate()V
+HSPLcom/nexusguard/android/MainActivity;-><init>()V
+HSPLcom/nexusguard/android/MainActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/nexusguard/android/ui/MainViewModel;-><init>(Landroid/content/Context;Lcom/nexusguard/android/data/preferences/UserPreferencesRepository;Lcom/nexusguard/android/data/repository/SystemSensorsRepository;Lcom/nexusguard/android/data/repository/CleanerRepository;Lcom/nexusguard/android/service/GameBoostManager;Lcom/nexusguard/android/data/repository/AppUpdaterRepository;Lcom/nexusguard/android/data/local/NexusGuardDao;)V
+HSPLcom/nexusguard/android/ui/NexusGuardMainScreenKt;->NexusGuardMainScreen(Lcom/nexusguard/android/ui/MainViewModel;Landroidx/compose/runtime/Composer;I)V
+HSPLcom/nexusguard/android/ui/home/HomeScreenKt;->HomeScreen(Lcom/nexusguard/android/ui/HomeUiState;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;I)V
+HSPLcom/nexusguard/android/ui/clean/CleanScreenKt;->CleanScreen(Lcom/nexusguard/android/ui/CleanUiState;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;I)V
+HSPLcom/nexusguard/android/ui/games/GamesScreenKt;->GamesScreen(Lcom/nexusguard/android/ui/GamesUiState;Lkotlin/jvm/functions/Function6;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;I)V
+HSPLcom/nexusguard/android/ui/system/SystemScreenKt;->SystemScreen(Lcom/nexusguard/android/ui/SystemUiState;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;I)V

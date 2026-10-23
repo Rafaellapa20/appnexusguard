@@ -1,9 +1,5 @@
 package com.nexusguard.android.ui.navigation
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.nexusguard.android.ui.theme.NexusIcons
 
@@ -15,12 +11,12 @@ enum class NexusTab(
     HOME(
         route = "home",
         label = "Início",
-        icon = Icons.Outlined.Home
+        icon = NexusIcons.Home
     ),
     CLEAN(
         route = "clean",
         label = "Limpar",
-        icon = Icons.Outlined.Delete
+        icon = NexusIcons.Delete
     ),
     GAMES(
         route = "games",
@@ -35,7 +31,7 @@ enum class NexusTab(
     SYSTEM(
         route = "system",
         label = "Sistema",
-        icon = Icons.Outlined.Settings
+        icon = NexusIcons.Settings
     )
 }
 

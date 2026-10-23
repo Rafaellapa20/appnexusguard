@@ -31,9 +31,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -68,6 +65,7 @@ import com.nexusguard.android.ui.components.FileThumbnailOrTypeBadge
 import com.nexusguard.android.ui.components.NexusCard
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.components.NexusSystemIntents
+import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 
@@ -286,7 +284,7 @@ fun CleanScreen(
                             )
                         } else {
                             Icon(
-                                imageVector = Icons.Outlined.Refresh,
+                                imageVector = NexusIcons.Refresh,
                                 contentDescription = "Atualizar análise",
                                 tint = colors.accent2
                             )
@@ -575,7 +573,7 @@ private fun CleanCategoryRealRow(
             ) {
                 if (isSelected) {
                     Icon(
-                        imageVector = Icons.Filled.Check,
+                        imageVector = NexusIcons.Check,
                         contentDescription = null,
                         tint = Color(0xFF0C0F16),
                         modifier = Modifier.size(15.dp)
@@ -655,7 +653,7 @@ private fun FilePreviewRow(
             ) {
                 if (isChecked) {
                     Icon(
-                        imageVector = Icons.Filled.Check,
+                        imageVector = NexusIcons.Check,
                         contentDescription = null,
                         tint = Color(0xFF0C0F16),
                         modifier = Modifier.size(14.dp)

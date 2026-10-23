@@ -31,3 +31,4 @@ plugins {
 
 rootProject.name = "Nexus Guard"
 include(":app")
+include(":baselineprofile")

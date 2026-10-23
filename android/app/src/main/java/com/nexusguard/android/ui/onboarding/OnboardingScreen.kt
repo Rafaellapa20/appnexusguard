@@ -19,10 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -68,7 +64,7 @@ fun OnboardingScreen(
             number = "02",
             title = "Lixo do sistema como quarentena",
             description = "Tudo o que apagas vai para o Lixo do sistema (MediaStore.createTrashRequest, Android 11+), funcionando como quarentena que podes restaurar.",
-            icon = Icons.Outlined.Delete,
+            icon = NexusIcons.Delete,
             accentColor = colors.ok
         ),
         OnboardingPrinciple(
@@ -82,7 +78,7 @@ fun OnboardingScreen(
             number = "04",
             title = "Permissões só quando necessárias",
             description = "Pede cada permissão apenas no momento em que é precisa, com uma explicação clara. A app funciona em modo reduzido sem ela.",
-            icon = Icons.Outlined.Lock,
+            icon = NexusIcons.Lock,
             accentColor = colors.warn
         ),
         OnboardingPrinciple(
@@ -233,7 +229,7 @@ fun OnboardingScreen(
         ) {
             NexusPrimaryGradientButton(
                 text = "Aceitar princípios e continuar",
-                leadingIcon = Icons.Outlined.CheckCircle,
+                leadingIcon = NexusIcons.CheckCircle,
                 onClick = onFinishOnboarding,
                 modifier = Modifier.fillMaxWidth()
             )

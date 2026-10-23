@@ -12,9 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -56,6 +53,7 @@ import com.nexusguard.android.ui.onboarding.OnboardingScreen
 import com.nexusguard.android.ui.settings.AppUpdatePromptDialog
 import com.nexusguard.android.ui.settings.SettingsScreen
 import com.nexusguard.android.ui.system.SystemScreen
+import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusTheme
 import java.util.Locale
 
@@ -371,7 +369,7 @@ private fun SecondaryTopBar(
                     modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                        imageVector = NexusIcons.ArrowBack,
                         contentDescription = "Voltar",
                         tint = colors.text
                     )
@@ -388,7 +386,7 @@ private fun SecondaryTopBar(
                     modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Settings,
+                        imageVector = NexusIcons.Settings,
                         contentDescription = "Definições",
                         tint = colors.textDim
                     )
