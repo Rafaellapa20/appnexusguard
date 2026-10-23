@@ -10,6 +10,7 @@ import com.nexusguard.android.data.repository.LiveBatteryMetrics
 import com.nexusguard.android.data.repository.LiveStorageMetrics
 import com.nexusguard.android.data.repository.LiveThermalMetrics
 import com.nexusguard.android.data.repository.RealSystemSnapshot
+import com.nexusguard.android.data.repository.ScanProgress
 import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.service.BoostSessionState
 import kotlinx.collections.immutable.ImmutableList
@@ -82,7 +83,8 @@ data class CleanUiState(
         scannedFilesCount = 0
     ),
     val isScanning: Boolean = false,
-    val scanStepText: String = ""
+    val scanStepText: String = "",
+    val scanProgress: ScanProgress = ScanProgress()
 )
 
 @Immutable
@@ -177,7 +179,8 @@ object ScreenUiStateMappers {
         snapshotFlow: Flow<RealSystemSnapshot>,
         cleanReportFlow: Flow<CleanScanReport>,
         isScanningFlow: Flow<Boolean>,
-        scanStepFlow: Flow<String>
+        scanStepFlow: Flow<String>,
+        scanProgressFlow: Flow<ScanProgress> = kotlinx.coroutines.flow.flowOf(ScanProgress())
     ): Flow<CleanUiState> {
         val storageOnlyFlow = snapshotFlow
             .map { it.isLoading to it.storage }
@@ -187,14 +190,16 @@ object ScreenUiStateMappers {
             storageOnlyFlow,
             cleanReportFlow,
             isScanningFlow,
-            scanStepFlow
-        ) { (isLoading, storage), report, scanning, stepText ->
+            scanStepFlow,
+            scanProgressFlow
+        ) { (isLoading, storage), report, scanning, stepText, progress ->
             CleanUiState(
                 isLoading = isLoading,
                 storage = storage,
                 cleanReport = report,
                 isScanning = scanning,
-                scanStepText = stepText
+                scanStepText = stepText,
+                scanProgress = progress
             )
         }.distinctUntilChanged()
     }

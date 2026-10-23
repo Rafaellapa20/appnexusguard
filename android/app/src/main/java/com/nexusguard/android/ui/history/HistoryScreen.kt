@@ -155,6 +155,9 @@ fun HistoryScreen(
                                 if (sender != null) {
                                     pendingRestoreId = entry.id
                                     restoreLauncher.launch(IntentSenderRequest.Builder(sender).build())
+                                } else {
+                                    onRestoreConfirmed(entry.id)
+                                    Toast.makeText(context, "Ficheiros restaurados do Lixo Nexus!", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             shape = NexusButtonShape
@@ -166,11 +169,11 @@ fun HistoryScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Restaurar do Lixo do sistema", color = colors.text)
+                            Text("Restaurar do Lixo (30 dias)", color = colors.text)
                         }
                     } else if (entry.isRestored) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text("✓ Restaurado do Lixo do sistema", style = NexusMonoTextStyles.badge, color = colors.ok)
+                        Text("✓ Restaurado do Lixo", style = NexusMonoTextStyles.badge, color = colors.ok)
                     }
                 }
             }

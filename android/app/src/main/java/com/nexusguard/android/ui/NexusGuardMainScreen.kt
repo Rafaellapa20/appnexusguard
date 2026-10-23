@@ -271,6 +271,8 @@ fun NexusGuardMainScreen(
                 CleanScreen(
                     uiState = cleanUiState,
                     onRefreshScan = { viewModel.refreshCleanScan(force = true) },
+                    onCancelScan = viewModel::cancelCleanScan,
+                    onAppCacheCleared = viewModel::onAppCacheClearFinished,
                     buildTrashIntent = viewModel::buildMoveToTrashIntentSender,
                     onTrashConfirmed = viewModel::onTrashRequestConfirmed
                 )

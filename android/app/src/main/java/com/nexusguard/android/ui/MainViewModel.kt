@@ -125,7 +125,8 @@ class MainViewModel @Inject constructor(
         snapshotFlow = liveSnapshot,
         cleanReportFlow = cleanReport,
         isScanningFlow = isScanningClean,
-        scanStepFlow = cleanScanStepText
+        scanStepFlow = cleanScanStepText,
+        scanProgressFlow = cleanerRepository.scanProgress
     ).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -245,15 +246,33 @@ class MainViewModel @Inject constructor(
 
             _isScanningClean.value = true
             _cleanScanStepText.value = "A pesquisar ficheiros no MediaStore..."
-            val scanned = cleanerRepository.scanRealDeviceStorage(
-                onStepProgress = { step -> _cleanScanStepText.value = step }
-            )
-            _cleanReport.value = scanned.copy(
-                timestampMillis = System.currentTimeMillis(),
-                freeStorageAtScanBytes = storage.freeBytes
-            )
-            _cleanScanStepText.value = ""
-            _isScanningClean.value = false
+            try {
+                val scanned = cleanerRepository.scanRealDeviceStorage(
+                    onStepProgress = { step -> _cleanScanStepText.value = step }
+                )
+                _cleanReport.value = scanned.copy(
+                    timestampMillis = System.currentTimeMillis(),
+                    freeStorageAtScanBytes = storage.freeBytes
+                )
+            } finally {
+                _cleanScanStepText.value = ""
+                _isScanningClean.value = false
+            }
+        }
+    }
+
+    fun cancelCleanScan() {
+        cleanerRepository.cancelCurrentScan()
+        _isScanningClean.value = false
+        _cleanScanStepText.value = ""
+    }
+
+    fun onAppCacheClearFinished(beforeCacheBytes: Long, onResult: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val freed = cleanerRepository.recordRealClearedAppCacheDiff(beforeCacheBytes)
+            onResult(freed)
+            refreshCleanScan(force = true)
+            sensorsRepository.refreshSlowMetrics(force = true)
         }
     }
 

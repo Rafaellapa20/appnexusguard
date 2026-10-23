@@ -2,8 +2,10 @@ package com.nexusguard.android.ui.clean
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.IntentSender
 import android.os.Build
+import android.os.storage.StorageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -15,7 +17,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -40,6 +41,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -47,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,16 +62,18 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nexusguard.android.BuildConfig
 import com.nexusguard.android.data.repository.CleanCategoryGroup
 import com.nexusguard.android.data.repository.CleanCategoryType
+import com.nexusguard.android.domain.AppCacheCandidate
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.ScannedFileCandidate
+import com.nexusguard.android.domain.SimilarPhotoGroup
 import com.nexusguard.android.ui.CleanUiState
+import com.nexusguard.android.ui.components.AppIconOrMonogram
 import com.nexusguard.android.ui.components.FileThumbnailOrTypeBadge
 import com.nexusguard.android.ui.components.NexusCard
 import com.nexusguard.android.ui.components.NexusCheckbox48dp
@@ -80,12 +85,15 @@ import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
 import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
+import kotlinx.collections.immutable.persistentListOf
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CleanScreen(
     uiState: CleanUiState,
     onRefreshScan: () -> Unit,
+    onCancelScan: () -> Unit = {},
+    onAppCacheCleared: (Long, (Long) -> Unit) -> Unit = { _, _ -> },
     buildTrashIntent: (List<ScannedFileCandidate>) -> IntentSender?,
     onTrashConfirmed: (List<ScannedFileCandidate>, List<String>) -> Unit
 ) {
@@ -95,19 +103,16 @@ fun CleanScreen(
     val cleanReport = uiState.cleanReport
     val isScanning = uiState.isScanning
 
-    // Categorias selecionadas para limpeza
+    // Fase 1 & 3: Só as categorias seguras vêm pré-selecionadas (cache, APK instalados, lixo, duplicados exatos, pastas vazias, restos)
     val selectedCategories = remember {
-        mutableStateListOf(
-            CleanCategoryType.INSTALLED_APKS,
-            CleanCategoryType.OLD_DOWNLOADS,
-            CleanCategoryType.DUPLICATES,
-            CleanCategoryType.OLD_SCREENSHOTS,
-            CleanCategoryType.EMPTY_FOLDERS
-        )
+        mutableStateListOf<CleanCategoryType>().apply {
+            addAll(CleanCategoryType.entries.filter { it.isSafePreselected })
+        }
     }
 
-    // Ficheiros individualmente desmarcados na pré-visualização
+    // Ficheiros explicitamente selecionados (para categorias não pré-selecionadas) ou desmarcados (para categorias seguras)
     val deselectedFileUris = remember { mutableStateListOf<String>() }
+    val explicitlySelectedFileUris = remember { mutableStateListOf<String>() }
 
     // Categoria aberta para pré-visualização obrigatória
     var previewCategory by remember { mutableStateOf<CleanCategoryGroup?>(null) }
@@ -119,7 +124,22 @@ fun CleanScreen(
         onRefreshScan()
     }
 
-    // Launcher para MediaStore.createTrashRequest
+    // Launcher para StorageManager.ACTION_CLEAR_APP_CACHE (API 30+)
+    var cacheBytesBeforeDialog by remember { mutableLongStateOf(0L) }
+    val clearCacheDialogLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        onAppCacheCleared(cacheBytesBeforeDialog) { freedBytes ->
+            val msg = if (freedBytes > 0L) {
+                "Cache das apps limpa: ${NexusFormatters.formatBytes(freedBytes)} libertados (medido via StorageStatsManager)."
+            } else {
+                "Nenhuma alteração detetada na cache das apps."
+            }
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Launcher para MediaStore.createTrashRequest / createDeleteRequest
     var pendingTrashFiles by remember { mutableStateOf<List<ScannedFileCandidate>>(emptyList()) }
     var pendingEmptyFolders by remember { mutableStateOf<List<String>>(emptyList()) }
 
@@ -128,11 +148,12 @@ fun CleanScreen(
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             onTrashConfirmed(pendingTrashFiles, pendingEmptyFolders)
-            Toast.makeText(
-                context,
-                "Movido para o Lixo do sistema com sucesso (restaurável durante 30 dias).",
-                Toast.LENGTH_LONG
-            ).show()
+            val msg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                "Movido para o Lixo com sucesso (restaurável durante 30 dias)."
+            } else {
+                "Ficheiros removidos (abaixo do Android 11 não há Lixo reversível)."
+            }
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -142,12 +163,44 @@ fun CleanScreen(
         }
     }
 
-    val selectedFilesToTrash = remember(cleanReport, selectedCategories.toList(), deselectedFileUris.toList()) {
+    fun isFileChecked(file: ScannedFileCandidate, categoryType: CleanCategoryType): Boolean {
+        return if (file.isPreselectedByDefault && categoryType in selectedCategories) {
+            file.contentUri !in deselectedFileUris
+        } else {
+            file.contentUri in explicitlySelectedFileUris || (categoryType in selectedCategories && file.contentUri !in deselectedFileUris)
+        }
+    }
+
+    fun toggleFileChecked(file: ScannedFileCandidate, categoryType: CleanCategoryType) {
+        val currentlyChecked = isFileChecked(file, categoryType)
+        if (currentlyChecked) {
+            explicitlySelectedFileUris.remove(file.contentUri)
+            if (file.contentUri !in deselectedFileUris) {
+                deselectedFileUris.add(file.contentUri)
+            }
+        } else {
+            deselectedFileUris.remove(file.contentUri)
+            if (file.contentUri !in explicitlySelectedFileUris) {
+                explicitlySelectedFileUris.add(file.contentUri)
+            }
+            if (categoryType !in selectedCategories) {
+                selectedCategories.add(categoryType)
+            }
+        }
+    }
+
+    val selectedFilesToTrash = remember(
+        cleanReport,
+        selectedCategories.toList(),
+        deselectedFileUris.toList(),
+        explicitlySelectedFileUris.toList()
+    ) {
         cleanReport.categories
             .filter { it.type in selectedCategories }
-            .flatMap { it.files }
+            .flatMap { group ->
+                group.files.filter { file -> isFileChecked(file, group.type) }
+            }
             .distinctBy { it.contentUri }
-            .filter { it.contentUri !in deselectedFileUris }
     }
     val selectedEmptyFolders = remember(cleanReport, selectedCategories.toList()) {
         cleanReport.categories
@@ -158,7 +211,7 @@ fun CleanScreen(
     val totalSelectedBytes = selectedFilesToTrash.sumOf { it.sizeBytes }
     val totalSelectedFormatted = NexusFormatters.formatBytes(totalSelectedBytes)
 
-    // ModalBottomSheet de pré-visualização obrigatória com LazyColumn + key + miniaturas LruCache
+    // ModalBottomSheet de pré-visualização obrigatória
     previewCategory?.let { group ->
         ModalBottomSheet(
             onDismissRequest = { previewCategory = null },
@@ -182,69 +235,103 @@ fun CleanScreen(
                     color = colors.textDim
                 )
 
-                if (group.type == CleanCategoryType.EMPTY_FOLDERS) {
-                    if (group.emptyFoldersPaths.isEmpty()) {
-                        Text(
-                            text = "Nenhuma pasta vazia encontrada.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.textMuted,
-                            modifier = Modifier.padding(vertical = 16.dp)
+                when (group.type) {
+                    CleanCategoryType.APP_CACHE -> {
+                        AppCachePreviewSection(
+                            group = group,
+                            hasUsageStatsPermission = cleanReport.hasUsageStatsPermission,
+                            hasManageStoragePermission = cleanReport.hasManageStoragePermission,
+                            onClearAllAppCache = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                    cacheBytesBeforeDialog = group.totalSizeBytes
+                                    try {
+                                        clearCacheDialogLauncher.launch(
+                                            Intent(StorageManager.ACTION_CLEAR_APP_CACHE)
+                                        )
+                                    } catch (_: Exception) {
+                                        NexusSystemIntents.openSystemClearCacheAction(context)
+                                    }
+                                } else {
+                                    NexusSystemIntents.openSystemClearCacheAction(context)
+                                }
+                            }
                         )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.height(260.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(
-                                items = group.emptyFoldersPaths,
-                                key = { it }
-                            ) { folderPath ->
-                                NexusCard(
-                                    backgroundColor = colors.surface,
-                                    borderColor = colors.border,
-                                    contentPadding = PaddingValues(10.dp)
-                                ) {
-                                    Text(
-                                        text = folderPath,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = colors.text
-                                    )
+                    }
+                    CleanCategoryType.EMPTY_FOLDERS -> {
+                        if (group.emptyFoldersPaths.isEmpty()) {
+                            Text(
+                                text = "Nenhuma pasta vazia encontrada.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.textMuted,
+                                modifier = Modifier.padding(vertical = 16.dp)
+                            )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.height(260.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(
+                                    items = group.emptyFoldersPaths,
+                                    key = { it }
+                                ) { folderPath ->
+                                    NexusCard(
+                                        backgroundColor = colors.surface,
+                                        borderColor = colors.border,
+                                        contentPadding = PaddingValues(10.dp)
+                                    ) {
+                                        Text(
+                                            text = folderPath,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.text
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                } else if (group.files.isEmpty()) {
-                    Text(
-                        text = if (!cleanReport.hasMediaPermission) {
-                            "Permissão de leitura de ficheiros não concedida."
-                        } else {
-                            "Nenhum ficheiro encontrado nesta categoria."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.textMuted,
-                        modifier = Modifier.padding(vertical = 16.dp)
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.height(320.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(
-                            items = group.files,
-                            key = { it.contentUri }
-                        ) { file ->
-                            val isChecked = file.contentUri !in deselectedFileUris
-                            FilePreviewRow(
-                                file = file,
-                                isChecked = isChecked,
-                                onToggle = {
-                                    if (isChecked) {
-                                        deselectedFileUris.add(file.contentUri)
-                                    } else {
-                                        deselectedFileUris.remove(file.contentUri)
-                                    }
-                                }
+                    CleanCategoryType.SIMILAR_PHOTOS -> {
+                        SimilarPhotosPreviewSection(
+                            groups = group.similarGroups,
+                            isFileChecked = { file -> isFileChecked(file, group.type) },
+                            onToggleFile = { file -> toggleFileChecked(file, group.type) }
+                        )
+                    }
+                    CleanCategoryType.MESSAGING_MEDIA -> {
+                        MessagingMediaPreviewSection(
+                            files = group.files,
+                            isFileChecked = { file -> isFileChecked(file, group.type) },
+                            onToggleFile = { file -> toggleFileChecked(file, group.type) }
+                        )
+                    }
+                    else -> {
+                        if (group.files.isEmpty()) {
+                            Text(
+                                text = if (!cleanReport.hasMediaPermission) {
+                                    "Permissão de leitura de ficheiros não concedida."
+                                } else {
+                                    "Nenhum ficheiro encontrado nesta categoria."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.textMuted,
+                                modifier = Modifier.padding(vertical = 16.dp)
                             )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.height(320.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(
+                                    items = group.files,
+                                    key = { it.contentUri }
+                                ) { file ->
+                                    val isChecked = isFileChecked(file, group.type)
+                                    FilePreviewRow(
+                                        file = file,
+                                        isChecked = isChecked,
+                                        onToggle = { toggleFileChecked(file, group.type) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -268,7 +355,7 @@ fun CleanScreen(
                 .padding(horizontal = 18.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Cartão de Armazenamento Real (StatFs + StorageStatsManager) com proporções reais + mínimo visual de 2 dp e FlowRow
+            // Cartão de Armazenamento Real (StatFs + StorageStatsManager)
             NexusCard(
                 backgroundColor = colors.surface,
                 borderColor = colors.border,
@@ -289,17 +376,17 @@ fun CleanScreen(
                         color = colors.text,
                         modifier = Modifier.weight(1f)
                     )
-                    IconButton(
-                        onClick = onRefreshScan,
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                    ) {
-                        if (isScanning) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = colors.accent2
-                            )
-                        } else {
+                    if (isScanning) {
+                        NexusTextButton(
+                            text = "Cancelar",
+                            color = colors.danger,
+                            onClick = onCancelScan
+                        )
+                    } else {
+                        IconButton(
+                            onClick = onRefreshScan,
+                            modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                        ) {
                             Icon(
                                 imageVector = NexusIcons.Refresh,
                                 contentDescription = "Atualizar análise",
@@ -309,12 +396,19 @@ fun CleanScreen(
                     }
                 }
 
-                if (isScanning && uiState.scanStepText.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(2.dp))
+                if (isScanning) {
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = uiState.scanStepText,
+                        text = uiState.scanStepText.ifBlank { "A analisar categorias em paralelo..." },
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.accent2
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { uiState.scanProgress.progressFraction },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accent2,
+                        trackColor = colors.surfaceAlt
                     )
                 }
 
@@ -372,7 +466,7 @@ fun CleanScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Para encontrar duplicados reais (SHA-256), capturas antigas e ficheiros grandes com pré-visualização, autoriza o acesso aos ficheiros multimédia.",
+                        text = "Para encontrar duplicados reais (SHA-256), fotos semelhantes (dHash), capturas antigas e ficheiros grandes com pré-visualização, autoriza o acesso aos ficheiros multimédia.",
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.textDim
                     )
@@ -399,18 +493,19 @@ fun CleanScreen(
                 }
             }
 
-            // Lista das 6 categorias reais com chevron à direita e checkbox de 48 dp
             val displayCategories = if (cleanReport.categories.isNotEmpty()) {
                 cleanReport.categories
             } else {
-                CleanCategoryType.entries.map {
-                    CleanCategoryGroup(
-                        type = it,
-                        subtitlePt = if (isScanning) "A analisar..." else it.emptySubtitlePt,
-                        files = kotlinx.collections.immutable.persistentListOf(),
-                        totalSizeBytes = 0L
-                    )
-                }
+                CleanCategoryType.entries
+                    .filter { !it.requiresFullFlavorManageStorage || BuildConfig.IS_FULL_FLAVOR }
+                    .map {
+                        CleanCategoryGroup(
+                            type = it,
+                            subtitlePt = if (isScanning) "A analisar..." else it.emptySubtitlePt,
+                            files = persistentListOf(),
+                            totalSizeBytes = 0L
+                        )
+                    }
             }
 
             displayCategories.forEach { group ->
@@ -424,6 +519,10 @@ fun CleanScreen(
                             selectedCategories.remove(group.type)
                         } else {
                             selectedCategories.add(group.type)
+                            if (!group.type.isSafePreselected) {
+                                // Abre a pré-visualização para categorias que exigem revisão manual (semelhantes, desfocadas, grandes, mensagens)
+                                previewCategory = group
+                            }
                         }
                     },
                     onOpenPreview = {
@@ -449,12 +548,12 @@ fun CleanScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Modo avançado: APKs e pastas não-media",
+                                text = "Modo avançado: Restos de apps, subpastas APK e Lixo Nexus",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                                 color = colors.text
                             )
                             Text(
-                                text = "Opcional: concede MANAGE_EXTERNAL_STORAGE para ler APKs em Transferências",
+                                text = "Opcional: concede MANAGE_EXTERNAL_STORAGE para restos em Android/media e limpeza global de cache",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colors.textDim
                             )
@@ -467,32 +566,23 @@ fun CleanScreen(
                         )
                     }
                 }
-            }
-
-            // Linha informativa para a cache do sistema
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = 48.dp)
-                    .clickable(role = Role.Button) {
-                        NexusSystemIntents.openSystemClearCacheAction(context)
-                    }
-                    .padding(horizontal = 4.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Caches das outras apps (pede confirmação do sistema)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.textDim,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                NexusTextButton(
-                    text = "Abrir →",
-                    color = colors.accent2,
-                    onClick = { NexusSystemIntents.openSystemClearCacheAction(context) }
-                )
+            } else if (!BuildConfig.IS_FULL_FLAVOR) {
+                NexusCard(
+                    backgroundColor = colors.surface,
+                    borderColor = colors.border,
+                    contentPadding = PaddingValues(12.dp)
+                ) {
+                    Text(
+                        text = "Restos de apps desinstaladas (Android/media)",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                        color = colors.textDim
+                    )
+                    Text(
+                        text = "Disponível na versão completa (requer MANAGE_EXTERNAL_STORAGE).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textMuted
+                    )
+                }
             }
         }
 
@@ -520,12 +610,12 @@ fun CleanScreen(
                             trashIntentLauncher.launch(
                                 IntentSenderRequest.Builder(intentSender).build()
                             )
-                        } else if (selectedEmptyFolders.isNotEmpty()) {
-                            onTrashConfirmed(emptyList(), selectedEmptyFolders)
+                        } else if (selectedFilesToTrash.isNotEmpty() || selectedEmptyFolders.isNotEmpty()) {
+                            onTrashConfirmed(selectedFilesToTrash, selectedEmptyFolders)
                             Toast.makeText(
                                 context,
-                                "${selectedEmptyFolders.size} pasta(s) vazia(s) removida(s).",
-                                Toast.LENGTH_SHORT
+                                "Limpeza concluída (ficheiros movidos para o Lixo Nexus · 30 dias).",
+                                Toast.LENGTH_LONG
                             ).show()
                         } else {
                             val firstGroup = cleanReport.categories.firstOrNull {
@@ -543,7 +633,11 @@ fun CleanScreen(
                             horizontalArrangement = Arrangement.Center
                         ) {
                             Text(
-                                text = "Mover para o Lixo · ",
+                                text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                    "Mover para o Lixo · "
+                                } else {
+                                    "Limpar · "
+                                },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = colors.onAccent
                             )
@@ -565,9 +659,13 @@ fun CleanScreen(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Toca numa categoria para pré-visualizar · Vai para o Lixo do sistema (30 dias)",
+                    text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        "Toca numa categoria para pré-visualizar · Vai para o Lixo (restaurável 30 dias)"
+                    } else {
+                        "Atenção: abaixo do Android 11 (API 30) a remoção no MediaStore não é reversível"
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = colors.textMuted,
+                    color = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) colors.textMuted else colors.warn,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
             }
@@ -575,10 +673,214 @@ fun CleanScreen(
     }
 }
 
-/**
- * Fase 6: Barra de armazenamento com proporções reais (sem coerceIn mínimo artificial),
- * aplicando apenas um mínimo visual de 2 dp aos segmentos maiores do que zero.
- */
+@Composable
+private fun AppCachePreviewSection(
+    group: CleanCategoryGroup,
+    hasUsageStatsPermission: Boolean,
+    hasManageStoragePermission: Boolean,
+    onClearAllAppCache: () -> Unit
+) {
+    val colors = NexusTheme.colors
+    val context = LocalContext.current
+
+    if (!hasUsageStatsPermission) {
+        NexusCard(
+            backgroundColor = colors.surface,
+            borderColor = colors.border,
+            contentPadding = PaddingValues(12.dp)
+        ) {
+            Text(
+                text = "Requer acesso a utilização (PACKAGE_USAGE_STATS)",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                color = colors.text
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Para ler o cacheBytes real de cada app via StorageStatsManager, concede o Acesso a Dados de Utilização.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textDim
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            NexusChip(
+                text = "Conceder acesso a utilização",
+                color = colors.accent2,
+                onClick = { NexusSystemIntents.openUsageAccessSettings(context) }
+            )
+        }
+        return
+    }
+
+    if (BuildConfig.IS_FULL_FLAVOR && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && hasManageStoragePermission) {
+        NexusPrimaryGradientButton(
+            text = "Limpar cache de todas as apps (${NexusFormatters.formatBytes(group.totalSizeBytes)})",
+            onClick = onClearAllAppCache,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            text = "Abre o diálogo oficial do Android (ACTION_CLEAR_APP_CACHE) e mede a diferença real antes e depois.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.textMuted
+        )
+    } else {
+        Text(
+            text = "Sem root ou permissão avançada, o Android exige limpar a cache nas definições de cada app:",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textDim
+        )
+    }
+
+    if (group.appCaches.isEmpty()) {
+        Text(
+            text = "Nenhuma app com cache significativa encontrada.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.textMuted,
+            modifier = Modifier.padding(vertical = 12.dp)
+        )
+    } else {
+        LazyColumn(
+            modifier = Modifier.height(280.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(
+                items = group.appCaches,
+                key = { it.packageName }
+            ) { item: AppCacheCandidate ->
+                NexusCard(
+                    backgroundColor = colors.surface,
+                    borderColor = colors.border,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            AppIconOrMonogram(
+                                packageName = item.packageName,
+                                monogram = item.monogram,
+                                iconSizeDp = 34
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = item.appName,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                    color = colors.text,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "Cache: ${NexusFormatters.formatBytes(item.cacheBytes)}",
+                                    style = NexusMonoTextStyles.metricSmall,
+                                    color = colors.warn
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        NexusTextButton(
+                            text = "Abrir definições",
+                            color = colors.accent2,
+                            onClick = {
+                                NexusSystemIntents.openAppDetailsSettings(context, item.packageName)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SimilarPhotosPreviewSection(
+    groups: List<SimilarPhotoGroup>,
+    isFileChecked: (ScannedFileCandidate) -> Boolean,
+    onToggleFile: (ScannedFileCandidate) -> Unit
+) {
+    val colors = NexusTheme.colors
+    if (groups.isEmpty()) {
+        Text(
+            text = "Nenhum grupo de fotos semelhantes detetado (dHash ≤ 6 bits em janela de 10 min).",
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.textMuted,
+            modifier = Modifier.padding(vertical = 16.dp)
+        )
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.height(340.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        items(
+            items = groups,
+            key = { it.groupId }
+        ) { simGroup ->
+            NexusCard(
+                backgroundColor = colors.surface,
+                borderColor = colors.border,
+                contentPadding = PaddingValues(10.dp)
+            ) {
+                Text(
+                    text = "Grupo (${simGroup.allPhotos.size} fotos) · Manter mais nítida: ${simGroup.keepPhoto.displayName}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.ok
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                simGroup.duplicatePhotos.forEach { photo ->
+                    val checked = isFileChecked(photo)
+                    FilePreviewRow(
+                        file = photo,
+                        isChecked = checked,
+                        onToggle = { onToggleFile(photo) }
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessagingMediaPreviewSection(
+    files: List<ScannedFileCandidate>,
+    isFileChecked: (ScannedFileCandidate) -> Boolean,
+    onToggleFile: (ScannedFileCandidate) -> Unit
+) {
+    val colors = NexusTheme.colors
+    if (files.isEmpty()) {
+        Text(
+            text = "Nenhum ficheiro de mensagens (WhatsApp, Telegram, Signal) encontrado com estes critérios.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.textMuted,
+            modifier = Modifier.padding(vertical = 16.dp)
+        )
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.height(320.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(
+            items = files,
+            key = { it.contentUri }
+        ) { file ->
+            val checked = isFileChecked(file)
+            FilePreviewRow(
+                file = file,
+                isChecked = checked,
+                badgePrefix = listOfNotNull(file.messagingAppName, file.messagingMediaType).joinToString(" · "),
+                onToggle = { onToggleFile(file) }
+            )
+        }
+    }
+}
+
 @Composable
 private fun ProportionalStorageBar(
     totalBytes: Long,
@@ -647,11 +949,15 @@ private fun CleanCategoryRealRow(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            NexusCheckbox48dp(
-                checked = isSelected,
-                onToggle = onToggleSelect
-            )
-            Spacer(modifier = Modifier.width(4.dp))
+            if (group.type == CleanCategoryType.APP_CACHE) {
+                Spacer(modifier = Modifier.width(12.dp))
+            } else {
+                NexusCheckbox48dp(
+                    checked = isSelected,
+                    onToggle = onToggleSelect
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = group.type.titlePt,
@@ -685,6 +991,7 @@ private fun CleanCategoryRealRow(
 private fun FilePreviewRow(
     file: ScannedFileCandidate,
     isChecked: Boolean,
+    badgePrefix: String? = null,
     onToggle: () -> Unit
 ) {
     val colors = NexusTheme.colors
@@ -712,8 +1019,17 @@ private fun FilePreviewRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                val pathAndSize = buildString {
+                    if (!badgePrefix.isNullOrBlank()) {
+                        append(badgePrefix)
+                        append(" · ")
+                    }
+                    append(file.relativePath)
+                    append(" · ")
+                    append(NexusFormatters.formatBytes(file.sizeBytes))
+                }
                 Text(
-                    text = "${file.relativePath} · ${NexusFormatters.formatBytes(file.sizeBytes)}",
+                    text = pathAndSize,
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textMuted,
                     maxLines = 1,

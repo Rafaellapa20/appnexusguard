@@ -9,9 +9,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         HistoryEntity::class,
         BatterySampleEntity::class,
-        FileHashCacheEntity::class
+        FileHashCacheEntity::class,
+        NexusTrashEntity::class,
+        ChargingSessionEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class NexusGuardDatabase : RoomDatabase() {
@@ -29,6 +31,42 @@ abstract class NexusGuardDatabase : RoomDatabase() {
                         `partialHash` TEXT NOT NULL,
                         `fullHash` TEXT,
                         PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `file_hash_cache` ADD COLUMN `dHash` INTEGER")
+                db.execSQL("ALTER TABLE `file_hash_cache` ADD COLUMN `laplacianSharpness` REAL")
+                db.execSQL("ALTER TABLE `battery_samples` ADD COLUMN `currentMa` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `battery_samples` ADD COLUMN `isScreenOn` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `nexus_trash_items` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `historyId` INTEGER NOT NULL,
+                        `originalPath` TEXT NOT NULL,
+                        `trashFilePath` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `sizeBytes` INTEGER NOT NULL,
+                        `trashedAtEpochMillis` INTEGER NOT NULL,
+                        `expiresAtEpochMillis` INTEGER NOT NULL,
+                        `isRestored` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `charging_sessions` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `startEpochMillis` INTEGER NOT NULL,
+                        `endEpochMillis` INTEGER NOT NULL,
+                        `startPercent` INTEGER NOT NULL,
+                        `endPercent` INTEGER NOT NULL,
+                        `maxTempCelsius` REAL NOT NULL
                     )
                     """.trimIndent()
                 )
