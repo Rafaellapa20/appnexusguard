@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -38,7 +39,16 @@ data class UserPreferencesState(
     val autoClearOwnCache: Boolean = true,
     val junkOver1GbAlertEnabled: Boolean = true,
     val newAppBatteryAlertEnabled: Boolean = true,
-    val lastSmartAlertEpochMillis: Long = 0L
+    val lastSmartAlertEpochMillis: Long = 0L,
+    val accessibilityDisclosureAccepted: Boolean = false,
+    val autoHibernationEnabled: Boolean = false,
+    val autoHibernationActivatedAtMillis: Long = 0L,
+    val autoHibernateOnScreenOff: Boolean = true,
+    val autoHibernatePeriodicHours: Int = 6,
+    val autoHibernateBeforeGameBoost: Boolean = true,
+    val autoHibernateTop10BatteryOnly: Boolean = true,
+    val neverClosePackagesCsv: String = "",
+    val alwaysHibernatePackagesCsv: String = ""
 )
 
 @Singleton
@@ -72,6 +82,15 @@ class UserPreferencesRepository @Inject constructor(
         val JUNK_OVER_1GB_ALERT = booleanPreferencesKey("junk_over_1gb_alert")
         val NEW_APP_BATTERY_ALERT = booleanPreferencesKey("new_app_battery_alert")
         val LAST_SMART_ALERT_MILLIS = longPreferencesKey("last_smart_alert_millis")
+        val ACCESSIBILITY_DISCLOSURE_ACCEPTED = booleanPreferencesKey("accessibility_disclosure_accepted")
+        val AUTO_HIBERNATION_ENABLED = booleanPreferencesKey("auto_hibernation_enabled")
+        val AUTO_HIBERNATION_ACTIVATED_MILLIS = longPreferencesKey("auto_hibernation_activated_millis")
+        val AUTO_HIBERNATE_ON_SCREEN_OFF = booleanPreferencesKey("auto_hibernate_on_screen_off")
+        val AUTO_HIBERNATE_PERIODIC_HOURS = intPreferencesKey("auto_hibernate_periodic_hours")
+        val AUTO_HIBERNATE_BEFORE_GAME_BOOST = booleanPreferencesKey("auto_hibernate_before_game_boost")
+        val AUTO_HIBERNATE_TOP10_ONLY = booleanPreferencesKey("auto_hibernate_top10_only")
+        val NEVER_CLOSE_PACKAGES_CSV = stringPreferencesKey("never_close_packages_csv")
+        val ALWAYS_HIBERNATE_PACKAGES_CSV = stringPreferencesKey("always_hibernate_packages_csv")
     }
 
     val preferencesFlow: Flow<UserPreferencesState> = dataStore.data.map { prefs ->
@@ -102,7 +121,16 @@ class UserPreferencesRepository @Inject constructor(
             autoClearOwnCache = prefs[Keys.AUTO_CLEAR_OWN_CACHE] ?: true,
             junkOver1GbAlertEnabled = prefs[Keys.JUNK_OVER_1GB_ALERT] ?: true,
             newAppBatteryAlertEnabled = prefs[Keys.NEW_APP_BATTERY_ALERT] ?: true,
-            lastSmartAlertEpochMillis = prefs[Keys.LAST_SMART_ALERT_MILLIS] ?: 0L
+            lastSmartAlertEpochMillis = prefs[Keys.LAST_SMART_ALERT_MILLIS] ?: 0L,
+            accessibilityDisclosureAccepted = prefs[Keys.ACCESSIBILITY_DISCLOSURE_ACCEPTED] ?: false,
+            autoHibernationEnabled = prefs[Keys.AUTO_HIBERNATION_ENABLED] ?: false,
+            autoHibernationActivatedAtMillis = prefs[Keys.AUTO_HIBERNATION_ACTIVATED_MILLIS] ?: 0L,
+            autoHibernateOnScreenOff = prefs[Keys.AUTO_HIBERNATE_ON_SCREEN_OFF] ?: true,
+            autoHibernatePeriodicHours = prefs[Keys.AUTO_HIBERNATE_PERIODIC_HOURS] ?: 6,
+            autoHibernateBeforeGameBoost = prefs[Keys.AUTO_HIBERNATE_BEFORE_GAME_BOOST] ?: true,
+            autoHibernateTop10BatteryOnly = prefs[Keys.AUTO_HIBERNATE_TOP10_ONLY] ?: true,
+            neverClosePackagesCsv = prefs[Keys.NEVER_CLOSE_PACKAGES_CSV] ?: "",
+            alwaysHibernatePackagesCsv = prefs[Keys.ALWAYS_HIBERNATE_PACKAGES_CSV] ?: ""
         )
     }
 
@@ -218,5 +246,71 @@ class UserPreferencesRepository @Inject constructor(
 
     suspend fun setLastSmartAlertSent(epochMillis: Long) {
         dataStore.edit { prefs -> prefs[Keys.LAST_SMART_ALERT_MILLIS] = epochMillis }
+    }
+
+    suspend fun setAccessibilityDisclosureAccepted(accepted: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.ACCESSIBILITY_DISCLOSURE_ACCEPTED] = accepted }
+    }
+
+    suspend fun setAutoHibernationEnabled(enabled: Boolean, nowMillis: Long = System.currentTimeMillis()) {
+        dataStore.edit { prefs ->
+            prefs[Keys.AUTO_HIBERNATION_ENABLED] = enabled
+            if (enabled && (prefs[Keys.AUTO_HIBERNATION_ACTIVATED_MILLIS] ?: 0L) == 0L) {
+                prefs[Keys.AUTO_HIBERNATION_ACTIVATED_MILLIS] = nowMillis
+            } else if (!enabled) {
+                prefs[Keys.AUTO_HIBERNATION_ACTIVATED_MILLIS] = 0L
+            }
+        }
+    }
+
+    suspend fun setAutoHibernationConfig(
+        onScreenOff: Boolean,
+        periodicHours: Int,
+        beforeGameBoost: Boolean,
+        top10BatteryOnly: Boolean
+    ) {
+        val validHours = when (periodicHours) {
+            12 -> 12
+            24 -> 24
+            else -> 6
+        }
+        dataStore.edit { prefs ->
+            prefs[Keys.AUTO_HIBERNATE_ON_SCREEN_OFF] = onScreenOff
+            prefs[Keys.AUTO_HIBERNATE_PERIODIC_HOURS] = validHours
+            prefs[Keys.AUTO_HIBERNATE_BEFORE_GAME_BOOST] = beforeGameBoost
+            prefs[Keys.AUTO_HIBERNATE_TOP10_ONLY] = top10BatteryOnly
+        }
+    }
+
+    suspend fun toggleNeverClosePackage(packageName: String) {
+        dataStore.edit { prefs ->
+            val current = (prefs[Keys.NEVER_CLOSE_PACKAGES_CSV] ?: "")
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toMutableSet()
+            if (current.contains(packageName)) {
+                current.remove(packageName)
+            } else {
+                current.add(packageName)
+            }
+            prefs[Keys.NEVER_CLOSE_PACKAGES_CSV] = current.sorted().joinToString(",")
+        }
+    }
+
+    suspend fun toggleAlwaysHibernatePackage(packageName: String) {
+        dataStore.edit { prefs ->
+            val current = (prefs[Keys.ALWAYS_HIBERNATE_PACKAGES_CSV] ?: "")
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toMutableSet()
+            if (current.contains(packageName)) {
+                current.remove(packageName)
+            } else {
+                current.add(packageName)
+            }
+            prefs[Keys.ALWAYS_HIBERNATE_PACKAGES_CSV] = current.sorted().joinToString(",")
+        }
     }
 }

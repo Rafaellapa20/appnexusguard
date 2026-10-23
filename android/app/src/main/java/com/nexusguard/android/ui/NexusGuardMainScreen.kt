@@ -44,6 +44,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.nexusguard.android.ui.apps.AppsImpactScreen
+import com.nexusguard.android.ui.apps.HibernationScreen
 import com.nexusguard.android.ui.battery.BatteryScreen
 import com.nexusguard.android.ui.clean.AdditionalCleanSection
 import com.nexusguard.android.ui.clean.CleanScreen
@@ -72,6 +73,7 @@ fun NexusGuardMainScreen(
     val boostSession by viewModel.boostSession.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val openDeepCleanEvent by viewModel.openDeepCleanEvent.collectAsStateWithLifecycle()
+    val openHibernationEvent by viewModel.openHibernationEvent.collectAsStateWithLifecycle()
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -118,6 +120,17 @@ fun NexusGuardMainScreen(
                     }
                     launchSingleTop = true
                     restoreState = true
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(openHibernationEvent) {
+        if (openHibernationEvent) {
+            viewModel.consumeOpenHibernationEvent()
+            if (currentRoute != NexusRoutes.HIBERNATION) {
+                navController.navigate(NexusRoutes.HIBERNATION) {
+                    launchSingleTop = true
                 }
             }
         }
@@ -183,8 +196,9 @@ fun NexusGuardMainScreen(
                         onBack = { navController.popBackStack() }
                     )
                 }
-                NexusRoutes.ACTIVE_BOOST -> {
-                    // O ecrã de sessão ativa mostra o cartão da notificação no topo
+                NexusRoutes.ACTIVE_BOOST,
+                NexusRoutes.HIBERNATION -> {
+                    // O ecrã tem cabeçalho dedicado
                 }
                 else -> {
                     NexusTopBar(
@@ -336,7 +350,48 @@ fun NexusGuardMainScreen(
                     uiState = appsImpactUiState,
                     onSelectPeriod = viewModel::selectAppsImpactPeriod,
                     onRefresh = { viewModel.refreshAppsImpact(saveStorageSnapshots = true) },
-                    onBatchUninstallFinished = viewModel::onBatchUninstallFinished
+                    onBatchUninstallFinished = viewModel::onBatchUninstallFinished,
+                    onOpenHibernation = {
+                        navController.navigate(NexusRoutes.HIBERNATION) {
+                            launchSingleTop = true
+                        }
+                    }
+                )
+            }
+            composable(NexusRoutes.HIBERNATION) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val hibernationState by viewModel.hibernationState.collectAsStateWithLifecycle()
+                val isExecuting by viewModel.isExecutingHibernation.collectAsStateWithLifecycle()
+                val progressItems by viewModel.hibernationProgressItems.collectAsStateWithLifecycle()
+                val lastSummary by viewModel.lastHibernationSummary.collectAsStateWithLifecycle()
+                LaunchedEffect(Unit) {
+                    viewModel.refreshHibernationState()
+                }
+                HibernationScreen(
+                    state = hibernationState,
+                    prefs = preferences,
+                    isExecuting = isExecuting,
+                    progressItems = progressItems,
+                    lastSummary = lastSummary,
+                    onBack = { navController.popBackStack() },
+                    onExecuteHibernationNow = viewModel::executeHibernationManual,
+                    onCancelHibernation = viewModel::cancelHibernationManual,
+                    onDismissSummary = viewModel::dismissHibernationSummary,
+                    onRequestShizukuPermission = viewModel::requestShizukuPermission,
+                    onAcceptAccessibilityDisclosureAndOpenSettings = {
+                        viewModel.acceptAccessibilityDisclosure()
+                        runCatching {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                        }
+                    },
+                    onToggleAutoHibernation = viewModel::setAutoHibernationEnabled,
+                    onUpdateAutoConfig = viewModel::updateAutoHibernationConfig,
+                    onToggleNeverClosePackage = viewModel::toggleNeverClosePackage,
+                    onToggleAlwaysHibernatePackage = viewModel::toggleAlwaysHibernatePackage,
+                    onRefreshState = viewModel::refreshHibernationState
                 )
             }
             composable(NexusTab.GAMES.route) {

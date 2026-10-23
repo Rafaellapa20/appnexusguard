@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_START_DEEP_CLEAN = "extra_start_deep_clean"
+        const val EXTRA_START_HIBERNATION = "extra_start_hibernation"
     }
 
     private val mainViewModel: MainViewModel by viewModels()
@@ -58,6 +59,10 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra(EXTRA_START_DEEP_CLEAN, false) == true) {
             intent.removeExtra(EXTRA_START_DEEP_CLEAN)
             mainViewModel.requestOpenDeepCleanFromShortcut()
+        }
+        if (intent?.getBooleanExtra(EXTRA_START_HIBERNATION, false) == true) {
+            intent.removeExtra(EXTRA_START_HIBERNATION)
+            mainViewModel.requestOpenHibernationFromShortcut()
         }
     }
 

@@ -10,4 +10,29 @@
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
 
+    <application>
+        <!-- Fase 11 (1): ShizukuProvider apenas no flavor 'full' -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- Fase 11 (2): Serviço de Acessibilidade apenas no flavor 'full' -->
+        <service
+            android:name="com.nexusguard.android.flavor.NexusAccessibilityService"
+            android:exported="true"
+            android:label="Nexus Guard · Hibernar apps"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+    </application>
+
 </manifest>

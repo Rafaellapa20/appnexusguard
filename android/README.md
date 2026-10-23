@@ -37,7 +37,8 @@ Otimizador transparente e honesto para Android, irmão da versão Windows (`com.
 | Otimizador de fotos (> 3 MB, EXIF, 30 dias no Lixo), Área de transferência, Vídeos grandes e Navegadores | Sim | Sim |
 | Registo de chamadas antigo (`READ_CALL_LOG` / `WRITE_CALL_LOG`) | Sim (opcional, só se o utilizador ativar e confirmar) | Não existe (zero permissões/código de registo de chamadas) |
 | Limpeza agendada (Diária/Semanal/Mensal), Avisos inteligentes (máx. 1/dia) e Relatório Mensal PDF | Sim | Sim |
-| Widgets Glance (`2×2` e `4×2`) e Quick Settings Tile | Sim | Sim |
+| Hibernação de apps em lote (Shizuku `am force-stop`, Serviço de Acessibilidade e Básico) | Sim (com lista protegida automática e modo automático opcional) | Não existe (`Restringir em fundo` abre os detalhes da app no sistema) |
+| Widgets Glance (`2×2` e `4×2`) e Quick Settings Tiles (`Limpeza rápida` e `Fechar apps`) | Sim | Sim |
 
 - **`full` (`assembleFullDebug` / `assembleFullRelease`):** Inclui `MANAGE_EXTERNAL_STORAGE` (como opção avançada), `KILL_BACKGROUND_PROCESSES`, limpeza opcional de registo de chamadas e hibernação de apps (Shizuku / Acessibilidade).
 - **`play` (`assemblePlayDebug` / `assemblePlayRelease`):** Compatível com as políticas restritas da Google Play Store — funciona exclusivamente com `MediaStore` / SAF e atalhos para as definições do sistema, sem `MANAGE_EXTERNAL_STORAGE`, sem `KILL_BACKGROUND_PROCESSES`, sem registo de chamadas e sem serviço de acessibilidade.
@@ -109,3 +110,30 @@ Sem acesso root, o sistema operativo Android bloqueia por segurança:
 - **Matar aplicações em primeiro plano de outros:** `killBackgroundProcesses` atua apenas em processos em segundo plano que o Android permite reciclar; para forçar a paragem completa de uma app, o Nexus Guard abre os detalhes oficiais da aplicação no sistema.
 - **Limpar silenciosamente a cache de outras apps uma a uma:** As caches privadas de outras aplicações são protegidas pelo sandbox do Android; o Nexus Guard disponibiliza o atalho oficial `StorageManager.ACTION_CLEAR_APP_CACHE` (Android 11+).
 - **Ler a temperatura interna de cada núcleo do CPU:** A partir do Android 10+, os nós térmicos do SoC estão restritos ao HAL do sistema; o Nexus Guard apresenta a temperatura real da bateria (`BatteryManager`), o estado térmico oficial (`PowerManager.currentThermalStatus`: *Normal / Ligeiro / Moderado / Grave / Crítico*) e a margem térmica (`getThermalHeadroom`).
+
+## Fase 11 — Hibernação de Apps (Exclusivo Flavor `full`)
+Na edição `full`, o ecrã **Hibernação de apps** permite parar aplicações em segundo plano sem root através de 3 motores (`ForceStopBackend`), selecionando sempre o melhor disponível:
+
+1. **Shizuku (`ForceStopBackendType.SHIZUKU` — Recomendado, instantâneo e silencioso):**
+   - Executa `am force-stop <package>` através do processo privilegiado ADB local (`Shizuku`).
+   - Fecha ~20 aplicações em `< 1 s` sem abrir janelas e funciona também com o ecrã desligado.
+   - **Como ativar o Shizuku sem PC (Android 11+):**
+     1. Instala a app **Shizuku** (`moe.shizuku.privileged.api`).
+     2. Ativa as *Opções de programador* e liga a **Depuração por Wi-Fi**.
+     3. Na app Shizuku, toca em *Emparelhar* → introduz o código de 6 dígitos → toca em *Iniciar*.
+     4. No Nexus Guard (*Apps → Hibernar apps → Melhorar*), toca em **Autorizar Shizuku agora**.
+
+2. **Serviço de Acessibilidade (`ForceStopBackendType.ACCESSIBILITY` — Visível, sem Shizuku):**
+   - Antes de abrir as Definições de Acessibilidade, apresenta um **ecrã de divulgação explícita** detalhando o que o serviço faz e o que **não** faz, exigindo o toque em **«Aceito»**.
+   - Restrito exclusivamente aos pacotes de Definições (`com.android.settings`, `com.samsung.accessibility`, `com.miui.securitycenter`, `com.coloros.safecenter`, `com.oplus.safecenter`), com `canPerformGestures="false"`.
+   - Apresenta uma barra flutuante `TYPE_ACCESSIBILITY_OVERLAY` (`«A hibernar X de Y · Cancelar»`) com timeout de `3 s` por aplicação.
+   - **IDs de recurso e rótulos suportados por fabricante (OEM) e idioma (PT/EN/ES/FR/DE):**
+     | Fabricante / ROM | IDs do botão «Forçar paragem» | IDs de confirmação | Rótulos suportados (case-insensitive) |
+     |---|---|---|---|
+     | **Google Pixel / AOSP** | `com.android.settings:id/button2_positive`, `com.android.settings:id/right_button` | `android:id/button1` | `Forçar paragem`, `Force stop`, `Forzar detención`, `Forcer l'arrêt`, `Beenden erzwingen`, `OK` |
+     | **Samsung One UI** | `com.android.settings:id/force_stop_button`, `com.android.settings:id/right_button` | `android:id/button1`, `com.android.settings:id/button1` | `Forçar paragem`, `Forçar interrupção`, `Force stop`, `OK` |
+     | **Xiaomi MIUI / HyperOS** | `com.miui.securitycenter:id/btn_force_stop`, `com.android.settings:id/right_button` | `miui:id/button1`, `android:id/button1` | `Forçar paragem`, `Force stop`, `Aceitar`, `OK` |
+
+3. **Básico (`ForceStopBackendType.BASIC` — Parcial):**
+   - Usa `ActivityManager.killBackgroundProcesses(pkg)` e informa com transparência: *«Pedido ao Android para libertar processos de N apps. O sistema pode reiniciá-los.»*
+   - Na variante `play`, não existe código de Shizuku, Acessibilidade nem `KILL_BACKGROUND_PROCESSES`; o ecrã intitula-se **«Restringir em fundo»** e fornece atalhos diretos para `ACTION_APPLICATION_DETAILS_SETTINGS`.

@@ -19,11 +19,15 @@ import com.nexusguard.android.data.repository.BatteryProfileManager
 import com.nexusguard.android.data.repository.CleanScanReport
 import com.nexusguard.android.data.repository.CleanerRepository
 import com.nexusguard.android.data.repository.DeepCleanCompletionResult
+import com.nexusguard.android.data.repository.HibernationEngine
+import com.nexusguard.android.data.repository.HibernationStateSnapshot
 import com.nexusguard.android.data.repository.RealSystemSnapshot
 import com.nexusguard.android.data.repository.SystemSensorsRepository
 import com.nexusguard.android.domain.AppImpactItem
 import com.nexusguard.android.domain.AppImpactPeriod
 import com.nexusguard.android.domain.EntitlementsRepository
+import com.nexusguard.android.domain.HibernationAppProgressItem
+import com.nexusguard.android.domain.HibernationExecutionSummary
 import com.nexusguard.android.domain.MonthlyReportSummary
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.PhotoOptimizeQuality
@@ -31,12 +35,14 @@ import com.nexusguard.android.domain.PhotoOptimizerCandidate
 import com.nexusguard.android.domain.PremiumFeature
 import com.nexusguard.android.domain.ScannedFileCandidate
 import com.nexusguard.android.domain.ThermalLevelPt
+import com.nexusguard.android.flavor.HibernationFlavorDelegate
 import com.nexusguard.android.service.BoostSessionState
 import com.nexusguard.android.service.ChargeMonitorForegroundService
 import com.nexusguard.android.service.GameBoostManager
 import com.nexusguard.android.ui.clean.AdditionalCleanToolsState
 import com.nexusguard.android.util.PdfReportExporter
 import com.nexusguard.android.widget.NexusWidgetUpdater
+import com.nexusguard.android.worker.AutoHibernationWorker
 import com.nexusguard.android.worker.BatterySampleWorker
 import com.nexusguard.android.worker.SystemMonitorWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -65,6 +71,7 @@ class MainViewModel @Inject constructor(
     private val boostManager: GameBoostManager,
     private val appUpdaterRepository: AppUpdaterRepository,
     private val entitlementsRepository: EntitlementsRepository,
+    private val hibernationEngine: HibernationEngine,
     private val dao: NexusGuardDao
 ) : ViewModel() {
 
@@ -145,6 +152,21 @@ class MainViewModel @Inject constructor(
 
     private val _openDeepCleanEvent = MutableStateFlow(false)
     val openDeepCleanEvent: StateFlow<Boolean> = _openDeepCleanEvent.asStateFlow()
+
+    private val _openHibernationEvent = MutableStateFlow(false)
+    val openHibernationEvent: StateFlow<Boolean> = _openHibernationEvent.asStateFlow()
+
+    private val _hibernationState = MutableStateFlow(HibernationStateSnapshot())
+    val hibernationState: StateFlow<HibernationStateSnapshot> = _hibernationState.asStateFlow()
+
+    private val _isExecutingHibernation = MutableStateFlow(false)
+    val isExecutingHibernation: StateFlow<Boolean> = _isExecutingHibernation.asStateFlow()
+
+    private val _hibernationProgressItems = MutableStateFlow<kotlinx.collections.immutable.ImmutableList<HibernationAppProgressItem>>(persistentListOf())
+    val hibernationProgressItems: StateFlow<kotlinx.collections.immutable.ImmutableList<HibernationAppProgressItem>> = _hibernationProgressItems.asStateFlow()
+
+    private val _lastHibernationSummary = MutableStateFlow<HibernationExecutionSummary?>(null)
+    val lastHibernationSummary: StateFlow<HibernationExecutionSummary?> = _lastHibernationSummary.asStateFlow()
 
     private val _analysisState = MutableStateFlow(OneClickAnalysisState())
     val analysisState: StateFlow<OneClickAnalysisState> = _analysisState.asStateFlow()
@@ -672,6 +694,10 @@ class MainViewModel @Inject constructor(
         launchExternalGame: Boolean
     ) {
         viewModelScope.launch {
+            val prefs = preferencesState.value
+            if (prefs.autoHibernationEnabled && prefs.autoHibernateBeforeGameBoost) {
+                hibernationEngine.runAutomaticHibernationNow(modeLabelPt = "Automático · Modo Jogo")
+            }
             boostManager.startBoostSession(
                 gamePackage = gamePackage,
                 gameName = gameName,
@@ -868,6 +894,116 @@ class MainViewModel @Inject constructor(
                 } catch (_: Exception) {
                 }
             }
+        }
+    }
+
+    // Fase 11: Hibernação de apps
+    fun requestOpenHibernationFromShortcut() {
+        _openHibernationEvent.value = true
+    }
+
+    fun consumeOpenHibernationEvent() {
+        _openHibernationEvent.value = false
+    }
+
+    fun refreshHibernationState() {
+        viewModelScope.launch {
+            val prefs = preferencesState.value
+            _hibernationState.value = hibernationEngine.loadHibernationState(prefs)
+        }
+    }
+
+    fun executeHibernationManual() {
+        if (_isExecutingHibernation.value) return
+        viewModelScope.launch {
+            _isExecutingHibernation.value = true
+            _lastHibernationSummary.value = null
+            try {
+                val prefs = preferencesState.value
+                val currentCandidates = _hibernationState.value.recommendedCandidates
+                val summary = hibernationEngine.executeHibernationBatch(
+                    modeLabelPt = "Manual",
+                    candidates = currentCandidates,
+                    prefs = prefs,
+                    onProgress = { items ->
+                        _hibernationProgressItems.value = items.toImmutableList()
+                    }
+                )
+                _lastHibernationSummary.value = summary
+                _hibernationState.value = hibernationEngine.loadHibernationState(prefs)
+            } finally {
+                _isExecutingHibernation.value = false
+            }
+        }
+    }
+
+    fun cancelHibernationManual() {
+        HibernationFlavorDelegate.cancelOngoingBatch()
+    }
+
+    fun dismissHibernationSummary() {
+        _lastHibernationSummary.value = null
+    }
+
+    fun requestShizukuPermission() {
+        HibernationFlavorDelegate.requestShizukuPermission()
+        refreshHibernationState()
+    }
+
+    fun acceptAccessibilityDisclosure() {
+        viewModelScope.launch {
+            preferencesRepository.setAccessibilityDisclosureAccepted(true)
+        }
+    }
+
+    fun setAutoHibernationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setAutoHibernationEnabled(enabled)
+            val prefs = preferencesState.value
+            AutoHibernationWorker.syncPeriodicSchedule(
+                context = appContext,
+                enabled = enabled,
+                intervalHours = prefs.autoHibernatePeriodicHours
+            )
+            refreshHibernationState()
+        }
+    }
+
+    fun updateAutoHibernationConfig(
+        onScreenOff: Boolean,
+        periodicHours: Int,
+        beforeGameBoost: Boolean,
+        top10Only: Boolean
+    ) {
+        viewModelScope.launch {
+            preferencesRepository.setAutoHibernationConfig(
+                onScreenOff = onScreenOff,
+                periodicHours = periodicHours,
+                beforeGameBoost = beforeGameBoost,
+                top10BatteryOnly = top10Only
+            )
+            AutoHibernationWorker.syncPeriodicSchedule(
+                context = appContext,
+                enabled = preferencesState.value.autoHibernationEnabled,
+                intervalHours = periodicHours
+            )
+            refreshHibernationState()
+        }
+    }
+
+    fun toggleNeverClosePackage(packageName: String) {
+        viewModelScope.launch {
+            preferencesRepository.toggleNeverClosePackage(packageName)
+            delay(60L)
+            refreshHibernationState()
+        }
+    }
+
+    fun toggleAlwaysHibernatePackage(packageName: String) {
+        viewModelScope.launch {
+            preferencesRepository.toggleAlwaysHibernatePackage(packageName)
+            delay(60L)
+            refreshHibernationState()
         }
     }
 }

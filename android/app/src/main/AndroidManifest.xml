@@ -129,6 +129,18 @@
             </intent-filter>
         </service>
 
+        <!-- Fase 11 (8): Quick Settings Tile «Fechar apps» -->
+        <service
+            android:name=".service.HibernationTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_gauge"
+            android:label="Fechar apps"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- FileProvider para instalar atualizações de APK e partilhar relatórios -->
         <provider
             android:name="androidx.core.content.FileProvider"

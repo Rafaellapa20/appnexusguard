@@ -124,6 +124,10 @@ dependencies {
     implementation(libs.androidx.glance.material3)
     baselineProfile(project(":baselineprofile"))
 
+    // Shizuku (exclusivo do flavor 'full' para Hibernação de apps sem root via am force-stop)
+    "fullImplementation"(libs.shizuku.api)
+    "fullImplementation"(libs.shizuku.provider)
+
     // Unit tests
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

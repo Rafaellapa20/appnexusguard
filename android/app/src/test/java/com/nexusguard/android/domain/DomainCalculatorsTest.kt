@@ -622,4 +622,150 @@ class DomainCalculatorsTest {
             )
         }
     }
+
+    @Test
+    fun `hibernation calculator filters protected apps and selects best backend`() {
+        val protectedCtx = ProtectedAppsContext(
+            ownPackageNames = setOf("com.nexusguard.android"),
+            activeImePackage = "com.google.android.inputmethod.latin",
+            launcherPackages = setOf("com.sec.android.app.launcher"),
+            defaultDialerPackage = "com.google.android.dialer",
+            defaultSmsPackage = "com.google.android.apps.messaging",
+            userNeverClosePackages = setOf("com.whatsapp")
+        )
+
+        assertEquals(
+            "Própria aplicação Nexus Guard",
+            HibernationCalculator.getProtectionReasonPt("com.nexusguard.android", protectedCtx)
+        )
+        assertEquals(
+            "Teclado ativo",
+            HibernationCalculator.getProtectionReasonPt("com.google.android.inputmethod.latin", protectedCtx)
+        )
+        assertEquals(
+            "Launcher do sistema",
+            HibernationCalculator.getProtectionReasonPt("com.sec.android.app.launcher", protectedCtx)
+        )
+        assertEquals(
+            "Relógio e despertador",
+            HibernationCalculator.getProtectionReasonPt("com.google.android.deskclock", protectedCtx)
+        )
+        assertEquals(
+            "Gestor de palavras-passe",
+            HibernationCalculator.getProtectionReasonPt("com.x8bit.bitwarden", protectedCtx)
+        )
+        assertEquals(
+            "Marcada como «Nunca fechar»",
+            HibernationCalculator.getProtectionReasonPt("com.whatsapp", protectedCtx)
+        )
+        assertEquals(
+            null,
+            HibernationCalculator.getProtectionReasonPt("com.instagram.android", protectedCtx)
+        )
+
+        val candidates = listOf(
+            HibernationCandidateApp("com.nexusguard.android", "Nexus Guard", "NG"),
+            HibernationCandidateApp("com.whatsapp", "WhatsApp", "WA"),
+            HibernationCandidateApp("com.instagram.android", "Instagram", "IN", isTop10Battery24h = true)
+        )
+        val eligible = HibernationCalculator.selectEligibleForHibernation(candidates, protectedCtx)
+        assertEquals(1, eligible.size)
+        assertEquals("com.instagram.android", eligible.first().packageName)
+
+        // Seleção de backend: Shizuku > Acessibilidade (ecrã ligado) > Básico (ecrã desligado)
+        assertEquals(
+            ForceStopBackendType.SHIZUKU,
+            HibernationCalculator.selectBestBackend(
+                shizukuAvailableAndPermitted = true,
+                accessibilityServiceEnabled = true,
+                isScreenInteractive = true
+            )
+        )
+        assertEquals(
+            ForceStopBackendType.ACCESSIBILITY,
+            HibernationCalculator.selectBestBackend(
+                shizukuAvailableAndPermitted = false,
+                accessibilityServiceEnabled = true,
+                isScreenInteractive = true
+            )
+        )
+        assertEquals(
+            ForceStopBackendType.BASIC,
+            HibernationCalculator.selectBestBackend(
+                shizukuAvailableAndPermitted = false,
+                accessibilityServiceEnabled = true,
+                isScreenInteractive = false
+            )
+        )
+    }
+
+    @Test
+    fun `hibernation calculator parses force stop and confirm buttons across PT EN ES FR DE and OEM ids`() {
+        val multilingualLabels = listOf(
+            "Forçar paragem",
+            "Force stop",
+            "Forzar detención",
+            "Forcer l'arrêt",
+            "Beenden erzwingen"
+        )
+        for (label in multilingualLabels) {
+            val nodes = listOf(
+                AccessibilityNodeSnapshot(index = 0, text = "Abrir", isEnabled = true),
+                AccessibilityNodeSnapshot(index = 1, text = label, isEnabled = true)
+            )
+            val result = HibernationCalculator.findForceStopNode(nodes)
+            assertEquals(
+                "Falhou para o rótulo '$label'",
+                ForceStopNodeLookupResult.ClickableForceStop(1),
+                result
+            )
+        }
+
+        // Botão desativado deve devolver AlreadyStoppedDisabled
+        val disabledNodes = listOf(
+            AccessibilityNodeSnapshot(
+                index = 2,
+                viewIdResourceName = "com.android.settings:id/right_button",
+                text = "Forçar paragem",
+                isEnabled = false
+            )
+        )
+        assertEquals(
+            ForceStopNodeLookupResult.AlreadyStoppedDisabled(2),
+            HibernationCalculator.findForceStopNode(disabledNodes)
+        )
+
+        // Diálogo de confirmação
+        val dialogNodes = listOf(
+            AccessibilityNodeSnapshot(index = 0, text = "Cancelar", isEnabled = true),
+            AccessibilityNodeSnapshot(index = 1, viewIdResourceName = "android:id/button1", text = "OK", isEnabled = true)
+        )
+        assertEquals(1, HibernationCalculator.findConfirmDialogNodeIndex(dialogNodes))
+
+        // Copy honesta e registo no Histórico
+        val copyShizuku = HibernationCalculator.buildExactSummaryCopyPt(ForceStopBackendType.SHIZUKU, 12)
+        assertEquals(
+            "12 apps paradas. Voltam a abrir quando as usares ou quando receberem notificações.",
+            copyShizuku
+        )
+        val copyBasic = HibernationCalculator.buildExactSummaryCopyPt(ForceStopBackendType.BASIC, 12)
+        assertEquals(
+            "Pedido ao Android para libertar processos de 12 apps. O sistema pode reiniciá-los.",
+            copyBasic
+        )
+
+        val summary = HibernationExecutionSummary(
+            modeLabelPt = "Manual",
+            backendType = ForceStopBackendType.SHIZUKU,
+            stoppedCount = 12,
+            alreadyStoppedCount = 3,
+            failedCount = 0,
+            honestSummaryCopyPt = copyShizuku,
+            timestampEpochMillis = 1_700_000_000_000L
+        )
+        val historyEntry = HibernationCalculator.buildHistoryEntry(summary)
+        assertEquals("HIBERNATION", historyEntry.actionType)
+        assertTrue(historyEntry.title.contains("Shizuku"))
+        assertTrue(historyEntry.details.contains("Paradas: 12"))
+    }
 }

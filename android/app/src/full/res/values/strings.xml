@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">O Nexus Guard usa este serviço exclusivamente quando pedes «Fechar apps» para tocar no botão «Forçar paragem» nas Definições do sistema e confirmar o fecho. Não lê mensagens, palavras-passe, notificações nem conteúdo de outras aplicações.</string>
+</resources>
