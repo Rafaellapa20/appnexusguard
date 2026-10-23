@@ -285,6 +285,7 @@ fun NexusGuardMainScreen(
                     },
                     onRunAnalysis = viewModel::runOneClickAnalysis,
                     onApplySafeFixes = viewModel::applyAutomaticFixes,
+                    onOpenApps = { navController.navigate(NexusTab.APPS.route) },
                     onOpenBattery = { navController.navigate(NexusTab.BATTERY.route) },
                     onOpenClean = { navController.navigate(NexusTab.CLEAN.route) },
                     onOpenSystem = { navController.navigate(NexusTab.SYSTEM.route) },

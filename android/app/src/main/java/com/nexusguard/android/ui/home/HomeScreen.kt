@@ -73,10 +73,12 @@ fun HomeScreen(
     onStartDeepClean: () -> Unit,
     onRunAnalysis: () -> Unit,
     onApplySafeFixes: () -> Unit,
+    onOpenApps: () -> Unit = {},
     onOpenBattery: () -> Unit,
     onOpenClean: () -> Unit,
     onOpenSystem: () -> Unit,
-    onOpenHistory: () -> Unit
+    onOpenHistory: () -> Unit,
+    onOpenHibernation: (() -> Unit)? = null
 ) {
     val colors = NexusTheme.colors
     val context = LocalContext.current
@@ -239,12 +241,37 @@ fun HomeScreen(
             )
         }
 
-        // Botão principal «Limpeza profunda» em gradiente + atalho para Diagnóstico 1 clique
+        // Botão principal «Limpeza profunda» em gradiente
         NexusPrimaryGradientButton(
             text = "Limpeza profunda",
             onClick = onStartDeepClean,
             modifier = Modifier.fillMaxWidth()
         )
+
+        // Fase 10: 3 ações rápidas por baixo do elemento-herói («Limpeza profunda», «Impacto das apps» e «Bateria»)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            NexusChip(
+                text = "Limpeza profunda",
+                color = colors.accent2,
+                modifier = Modifier.weight(1f),
+                onClick = onStartDeepClean
+            )
+            NexusChip(
+                text = "Impacto das apps",
+                color = colors.accent2,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenApps
+            )
+            NexusChip(
+                text = "Bateria",
+                color = colors.accent2,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenBattery
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -255,6 +282,104 @@ fun HomeScreen(
                 color = colors.accent2,
                 onClick = { if (!analysisState.isRunning) onRunAnalysis() }
             )
+            if (onOpenHibernation != null) {
+                Spacer(modifier = Modifier.width(8.dp))
+                NexusChip(
+                    text = "Hibernação de apps",
+                    color = colors.accent2,
+                    onClick = onOpenHibernation
+                )
+            }
+        }
+
+        // Fase 10: Feed curto de recomendações reais (máximo 3), cada uma com o valor medido e uma ação
+        if (!isLoading) {
+            val realRecommendations = buildList<Triple<String, String, Pair<String, () -> Unit>>> {
+                if (uiState.storage.usedBytes > 0L) {
+                    val usedFormatted = NexusFormatters.formatBytes(uiState.storage.usedBytes)
+                    val freeFormatted = NexusFormatters.formatBytes(uiState.storage.freeBytes)
+                    add(
+                        Triple(
+                            "Armazenamento analisado",
+                            "$usedFormatted ocupados · $freeFormatted livres",
+                            "Limpeza profunda" to onStartDeepClean
+                        )
+                    )
+                }
+                if (!uiState.hasUsageStatsPermission) {
+                    add(
+                        Triple(
+                            "Impacto das apps sem permissão",
+                            "PACKAGE_USAGE_STATS desativado · ${uiState.installedAppsCount} apps instaladas",
+                            "Impacto das apps" to onOpenApps
+                        )
+                    )
+                } else if (uiState.unusedAppsCount > 0) {
+                    add(
+                        Triple(
+                            "Apps sem uso há mais de 30 dias",
+                            "${uiState.unusedAppsCount} apps sem utilização · ${uiState.installedAppsCount} instaladas",
+                            "Impacto das apps" to onOpenApps
+                        )
+                    )
+                }
+                val batTemp = uiState.battery.temperatureCelsius
+                val tempMeasure = batTemp?.let { String.format(Locale.forLanguageTag("pt-PT"), "%.1f °C", it) } ?: "N/D"
+                add(
+                    Triple(
+                        "Estado da bateria e temperatura",
+                        "${uiState.battery.levelPercent} % · $tempMeasure · saúde ${uiState.battery.healthLabelPt.lowercase()}",
+                        "Bateria" to onOpenBattery
+                    )
+                )
+            }.take(3)
+
+            if (realRecommendations.isNotEmpty()) {
+                NexusCard(
+                    backgroundColor = colors.surface,
+                    borderColor = colors.border,
+                    contentPadding = PaddingValues(14.dp)
+                ) {
+                    Text(
+                        text = "Recomendações reais medidas",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.text
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    realRecommendations.forEachIndexed { idx, (title, measuredText, actionPair) ->
+                        if (idx > 0) {
+                            HorizontalDivider(
+                                color = colors.border.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(vertical = 6.dp)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                    color = colors.text
+                                )
+                                Text(
+                                    text = measuredText,
+                                    style = NexusMonoTextStyles.metricSmall,
+                                    color = colors.textDim
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            NexusTextButton(
+                                text = actionPair.first,
+                                color = colors.accent2,
+                                onClick = actionPair.second
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Progresso e resultados do fluxo «Analisar e corrigir com 1 clique» com animateContentSize e AnimatedVisibility

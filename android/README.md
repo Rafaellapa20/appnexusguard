@@ -33,10 +33,28 @@ Otimizador transparente e honesto para Android, irmão da versão Windows (`com.
 | Fotos semelhantes (dHash 64-bit) e desfocadas (Laplaciano) | Sim (via `MediaStore` + cache Room) | Sim (via `MediaStore` + cache Room) |
 | Limpeza `MediaStore` + Lixo do Sistema / Lixo Nexus | Sim (`MediaStore.createTrashRequest` API 30+ e Lixo Nexus `Android/media/<pkg>/.trash` para ficheiros `file://`, 30 dias) | Sim (`MediaStore.createTrashRequest`, API 30+) |
 | Bateria (`%/h`, Poupança Nexus, Alarme 80/85/90 %) | Sim (100 % disponível) | Sim (100 % disponível) |
+| Impacto das apps (Bateria, Dados/Wi-Fi, Armazenamento, Não usadas, Desinstalação em lote) | Sim (`UsageStatsManager`, `NetworkStatsManager`, `StorageStatsManager`, `ACTION_DELETE`) | Sim (`UsageStatsManager`, `NetworkStatsManager`, `StorageStatsManager`, `ACTION_DELETE`) |
+| Otimizador de fotos (> 3 MB, EXIF, 30 dias no Lixo), Área de transferência, Vídeos grandes e Navegadores | Sim | Sim |
+| Registo de chamadas antigo (`READ_CALL_LOG` / `WRITE_CALL_LOG`) | Sim (opcional, só se o utilizador ativar e confirmar) | Não existe (zero permissões/código de registo de chamadas) |
+| Limpeza agendada (Diária/Semanal/Mensal), Avisos inteligentes (máx. 1/dia) e Relatório Mensal PDF | Sim | Sim |
 | Widgets Glance (`2×2` e `4×2`) e Quick Settings Tile | Sim | Sim |
 
-- **`full` (`assembleFullDebug` / `assembleFullRelease`):** Inclui `MANAGE_EXTERNAL_STORAGE` (como opção avançada) e `KILL_BACKGROUND_PROCESSES`.
-- **`play` (`assemblePlayDebug` / `assemblePlayRelease`):** Compatível com as políticas restritas da Google Play Store — funciona exclusivamente com `MediaStore` / SAF e atalhos para as definições do sistema.
+- **`full` (`assembleFullDebug` / `assembleFullRelease`):** Inclui `MANAGE_EXTERNAL_STORAGE` (como opção avançada), `KILL_BACKGROUND_PROCESSES`, limpeza opcional de registo de chamadas e hibernação de apps (Shizuku / Acessibilidade).
+- **`play` (`assemblePlayDebug` / `assemblePlayRelease`):** Compatível com as políticas restritas da Google Play Store — funciona exclusivamente com `MediaStore` / SAF e atalhos para as definições do sistema, sem `MANAGE_EXTERNAL_STORAGE`, sem `KILL_BACKGROUND_PROCESSES`, sem registo de chamadas e sem serviço de acessibilidade.
+
+## Monetização futura (`EntitlementsRepository`)
+Atualmente **todas as funcionalidades são 100 % gratuitas e desbloqueadas** nos dois flavors (`AllUnlockedEntitlements` devolve sempre `true`), sem paywalls, sem selos «Premium», sem cadeados e sem anúncios. A arquitetura está preparada através da interface `EntitlementsRepository` e do enum `PremiumFeature`:
+1. `SIMILAR_AND_BLURRY_PHOTOS` — Fotos semelhantes (dHash 64-bit) e desfocadas (variância do Laplaciano).
+2. `PHOTO_OPTIMIZER` — Otimizador de fotos JPEG/HEIC (> 3 MB) com preservação de EXIF e pré-visualização antes/depois.
+3. `APP_IMPACT_7D_30D` — Histórico de impacto das apps nos períodos de 7 e 30 dias.
+4. `SCHEDULED_CLEAN` — Limpeza agendada automática (diária, semanal ou mensal).
+5. `AUTO_HIBERNATION` — Hibernação automática de apps em segundo plano (exclusivo `full`).
+6. `AUTO_BATTERY_SAVER` — Ativação automática do perfil «Poupança Nexus».
+7. `MONTHLY_REPORT` — Relatório mensal detalhado e exportação em PDF.
+8. `WIDGET_4X2` — Widget Glance expandido 4×2 com limpeza rápida.
+9. `THEMES` — Alternância entre tema escuro Nexus e tema claro.
+
+No futuro, para ativar subscrições ou compra única na Google Play, basta substituir o binding Hilt de `AllUnlockedEntitlements` por uma implementação `PlayBillingEntitlementsRepository` ligada ao `BillingClient` da Google Play Billing Library, sem alterar qualquer ecrã Compose.
 
 ## Resumo das Otimizações de Performance e Visual (Fases 1 a 6)
 1. **Fase 1 — Sensores (separar rápido do lento):**
