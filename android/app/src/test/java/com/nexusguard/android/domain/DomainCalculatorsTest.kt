@@ -1,10 +1,22 @@
 package com.nexusguard.android.domain
 
 import android.os.PowerManager
+import com.nexusguard.android.data.repository.CleanScanReport
+import com.nexusguard.android.data.repository.LiveBatteryMetrics
+import com.nexusguard.android.data.repository.LiveStorageMetrics
+import com.nexusguard.android.data.repository.LiveThermalMetrics
+import com.nexusguard.android.data.repository.RealSystemSnapshot
+import com.nexusguard.android.ui.ScreenUiStateMappers
+import kotlinx.collections.immutable.persistentListOf
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
 
 class DomainCalculatorsTest {
 
@@ -84,5 +96,129 @@ class DomainCalculatorsTest {
         }
         assertEquals(1, extras.size)
         assertEquals(11L, extras.first().id)
+    }
+
+    @Test
+    fun `partial hash and streaming full hash work and two-stage duplicate detection skips non-colliding files`() {
+        val bytesA = ByteArray(200 * 1024) { idx -> (idx % 251).toByte() }
+        val bytesACopy = bytesA.clone()
+        val bytesB = ByteArray(200 * 1024) { idx -> ((idx + 7) % 251).toByte() }
+
+        val partialA = FileClassifier.computePartialSha256FromByteArray(bytesA)
+        val partialACopy = FileClassifier.computePartialSha256FromByteArray(bytesACopy)
+        val partialB = FileClassifier.computePartialSha256FromByteArray(bytesB)
+
+        assertEquals(partialA, partialACopy)
+        assertNotEquals(partialA, partialB)
+
+        val fullA = FileClassifier.computeFullSha256Streaming(ByteArrayInputStream(bytesA))
+        val fullACopy = FileClassifier.computeFullSha256Streaming(ByteArrayInputStream(bytesACopy))
+        assertEquals(fullA, fullACopy)
+        assertEquals(FileClassifier.sha256Hex(bytesA), fullA)
+
+        // Testa 2 fases: ficheiros < 1 MB ignorados, e fullHash só chamado quando partialHash colide
+        val base = ScannedFileCandidate(
+            id = 1L,
+            contentUri = "c1",
+            displayName = "video.mp4",
+            relativePath = "Movies/",
+            sizeBytes = 2L * 1024 * 1024, // 2 MB
+            dateModifiedSeconds = 1000L,
+            mimeType = "video/mp4"
+        )
+        val smallIgnored1 = base.copy(id = 2L, sizeBytes = 500_000L)
+        val smallIgnored2 = base.copy(id = 3L, sizeBytes = 500_000L)
+        val dupOriginal = base.copy(id = 10L, dateModifiedSeconds = 100L)
+        val dupCopy = base.copy(id = 11L, dateModifiedSeconds = 200L)
+        val sameSizeDiffPartial = base.copy(id = 12L, dateModifiedSeconds = 300L)
+
+        var fullHashCallCount = 0
+        val extras = FileClassifier.findDuplicateExtrasTwoStage(
+            candidates = listOf(smallIgnored1, smallIgnored2, dupOriginal, dupCopy, sameSizeDiffPartial),
+            partialHashProvider = { item ->
+                if (item.id == 12L) "partial_unique" else "partial_collision"
+            },
+            fullHashProvider = { _ ->
+                fullHashCallCount++
+                "full_identical_hash"
+            }
+        )
+
+        // Apenas dupOriginal (10L) e dupCopy (11L) colidem no partialHash -> fullHash chamado exatamente 2 vezes!
+        assertEquals(2, fullHashCallCount)
+        assertEquals(1, extras.size)
+        // Conserva o mais antigo (10L) e devolve a cópia mais recente (11L)
+        assertEquals(11L, extras.first().id)
+    }
+
+    @Test
+    fun `SQL filters of FileClassifier generate expected MediaStore clauses`() {
+        val nowSec = 1_800_000_000L
+        val largeFilter = FileClassifier.buildLargeFilesSqlFilter()
+        assertEquals("_size > ?", largeFilter.selection)
+        assertEquals(listOf((100L * 1024 * 1024).toString()), largeFilter.selectionArgs)
+
+        val dlFilter = FileClassifier.buildOldDownloadsSqlFilter(nowSec, useRelativePath = true)
+        assertTrue(dlFilter.selection.contains("relative_path LIKE 'Download/%'"))
+        assertTrue(dlFilter.selection.contains("date_modified < ?"))
+        assertEquals(listOf((nowSec - 90L * 24 * 3600).toString()), dlFilter.selectionArgs)
+
+        val shotFilter = FileClassifier.buildOldScreenshotsSqlFilter(nowSec, useRelativePath = true)
+        assertTrue(shotFilter.selection.contains("relative_path LIKE '%Screenshots%'"))
+        assertEquals(listOf((nowSec - 180L * 24 * 3600).toString()), shotFilter.selectionArgs)
+
+        val apkFilter = FileClassifier.buildApkSqlFilter()
+        assertTrue(apkFilter.selection.contains("application/vnd.android.package-archive"))
+        assertTrue(apkFilter.selection.contains("_display_name LIKE '%.apk'"))
+
+        val dupFilter = FileClassifier.buildDuplicatesCandidateSqlFilter()
+        assertEquals("_size >= ?", dupFilter.selection)
+        assertEquals(listOf((1024L * 1024L).toString()), dupFilter.selectionArgs)
+    }
+
+    @Test
+    fun `distinctUntilChanged prevents CleanUiState from emitting when only battery or thermal changes`() = runTest {
+        val storageSame = LiveStorageMetrics(
+            freeBytes = 40_000_000_000L,
+            totalBytes = 128_000_000_000L,
+            usedBytes = 88_000_000_000L,
+            appsAndSystemBytes = 50_000_000_000L,
+            photosBytes = 20_000_000_000L,
+            videosBytes = 15_000_000_000L,
+            otherMediaBytes = 3_000_000_000L,
+            externalStatsAvailable = true
+        )
+
+        val snap1 = RealSystemSnapshot(
+            isLoading = false,
+            healthScore = 92,
+            storage = storageSame,
+            battery = LiveBatteryMetrics(80, 31.0f, "Boa", true, 4100, false, "120", "Medido", "OK", ""),
+            thermal = LiveThermalMetrics(ThermalLevelPt.NORMAL, 0.45f, "margem 0,45")
+        )
+        // Muda bateria e temperatura, mas o armazenamento mantém-se igual
+        val snap2 = snap1.copy(
+            battery = snap1.battery.copy(levelPercent = 79, temperatureCelsius = 33.5f),
+            thermal = LiveThermalMetrics(ThermalLevelPt.LIGEIRO, 0.70f, "margem 0,70"),
+            tempHistory60s = persistentListOf(31.0f, 33.5f)
+        )
+
+        val cleanStates = ScreenUiStateMappers.observeCleanUiState(
+            snapshotFlow = flowOf(snap1, snap2),
+            cleanReportFlow = flowOf(
+                CleanScanReport(
+                    hasMediaPermission = true,
+                    hasManageStoragePermission = false,
+                    categories = persistentListOf(),
+                    totalCleanableBytes = 0L,
+                    scannedFilesCount = 0
+                )
+            ),
+            isScanningFlow = flowOf(false),
+            scanStepFlow = flowOf("")
+        ).toList()
+
+        // Deve emitir apenas 1 vez porque storage, cleanReport e scanning não mudaram!
+        assertEquals(1, cleanStates.size)
     }
 }

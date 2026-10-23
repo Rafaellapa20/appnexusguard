@@ -12,9 +12,11 @@ import android.provider.MediaStore
 import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import com.nexusguard.android.BuildConfig
+import com.nexusguard.android.data.local.FileHashCacheEntity
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.domain.FileClassifier
+import com.nexusguard.android.domain.MediaStoreSqlFilter
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.ScannedFileCandidate
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -22,9 +24,20 @@ import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.security.MessageDigest
+import java.io.FileInputStream
+import java.nio.ByteBuffer
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -60,11 +73,24 @@ data class CleanScanReport(
     val freeStorageAtScanBytes: Long = 0L
 )
 
+@Immutable
+data class ScanProgress(
+    val isScanning: Boolean = false,
+    val stepText: String = "",
+    val progressFraction: Float = 0f,
+    val report: CleanScanReport? = null
+)
+
 @Singleton
 class CleanerRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val dao: NexusGuardDao
 ) {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val hashDispatcher = Dispatchers.IO.limitedParallelism(4)
+
+    private val _scanProgress = MutableStateFlow(ScanProgress())
+    val scanProgress: StateFlow<ScanProgress> = _scanProgress.asStateFlow()
 
     fun hasMediaReadPermission(): Boolean {
         if (hasManageExternalStoragePermission()) return true
@@ -93,42 +119,86 @@ class CleanerRepository @Inject constructor(
         }
     }
 
+    fun observeScanProgressFlow(): Flow<ScanProgress> = flow {
+        emit(ScanProgress(isScanning = true, stepText = "A iniciar análise de armazenamento...", progressFraction = 0.05f))
+        val report = scanRealDeviceStorage { step ->
+            _scanProgress.value = _scanProgress.value.copy(isScanning = true, stepText = step)
+        }
+        val done = ScanProgress(
+            isScanning = false,
+            stepText = "Análise concluída",
+            progressFraction = 1f,
+            report = report
+        )
+        _scanProgress.value = done
+        emit(done)
+    }.flowOn(Dispatchers.IO)
+
     suspend fun scanRealDeviceStorage(
         onStepProgress: (String) -> Unit = {}
     ): CleanScanReport = withContext(Dispatchers.IO) {
-        onStepProgress("A verificar permissões e ficheiros...")
         val mediaGranted = hasMediaReadPermission()
         val manageGranted = hasManageExternalStoragePermission()
         val nowSeconds = System.currentTimeMillis() / 1000L
+        val useRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
+        val updateStep: (String, Float) -> Unit = { text, fraction ->
+            onStepProgress(text)
+            _scanProgress.value = ScanProgress(
+                isScanning = true,
+                stepText = text,
+                progressFraction = fraction
+            )
+        }
+
+        updateStep("A ler pacotes instalados...", 0.10f)
         val installedPackages: Set<String> = try {
             context.packageManager.getInstalledApplications(0).map { it.packageName }.toSet()
         } catch (_: Exception) {
             emptySet()
         }
 
-        val allCandidates = queryMediaStoreFiles(installedPackages)
+        // 1. Ficheiros grandes (> 100 MB) via filtro SQL direto no MediaStore
+        updateStep("A procurar ficheiros grandes (> 100 MB)...", 0.20f)
+        val largeFiles = queryMediaStoreBySqlFilter(
+            filter = FileClassifier.buildLargeFilesSqlFilter(),
+            resolveApkPackage = false
+        )
 
-        val installedApks = allCandidates.filter {
-            FileClassifier.isInstalledApk(it, installedPackages)
-        }
-        val largeFiles = allCandidates.filter {
-            FileClassifier.isLargeFile(it.sizeBytes)
-        }
-        val oldDownloads = allCandidates.filter {
-            FileClassifier.isOldDownload(it.dateModifiedSeconds, nowSeconds, it.relativePath)
-        }
-        val duplicates = FileClassifier.findDuplicateExtras(allCandidates) { candidate ->
-            computeContentUriSha256(Uri.parse(candidate.contentUri))
-        }
-        val oldScreenshots = allCandidates.filter {
-            FileClassifier.isOldScreenshot(
-                it.dateModifiedSeconds,
-                nowSeconds,
-                it.displayName,
-                it.relativePath
-            )
-        }
+        // 2. Transferências antigas (> 90 dias) via filtro SQL direto
+        updateStep("A procurar transferências antigas (> 90 dias)...", 0.35f)
+        val oldDownloads = queryMediaStoreBySqlFilter(
+            filter = FileClassifier.buildOldDownloadsSqlFilter(nowSeconds, useRelativePath),
+            resolveApkPackage = false
+        )
+
+        // 3. Capturas de ecrã antigas (> 6 meses) via filtro SQL direto
+        updateStep("A procurar capturas de ecrã antigas...", 0.50f)
+        val oldScreenshots = queryMediaStoreBySqlFilter(
+            filter = FileClassifier.buildOldScreenshotsSqlFilter(nowSeconds, useRelativePath),
+            resolveApkPackage = false
+        )
+
+        // 4. APKs já instalados via filtro SQL direto
+        updateStep("A verificar ficheiros APK instalados...", 0.65f)
+        val apkCandidates = queryMediaStoreBySqlFilter(
+            filter = FileClassifier.buildApkSqlFilter(),
+            resolveApkPackage = true
+        ) + scanDownloadsFolderApks(installedPackages)
+        val installedApks = apkCandidates
+            .distinctBy { it.contentUri }
+            .filter { FileClassifier.isInstalledApk(it, installedPackages) }
+
+        // 5. Duplicados (>= 1 MB): agrupamento por tamanho + hash parcial 64 KB + SHA-256 completo + cache Room
+        updateStep("A analisar ficheiros duplicados (hash parcial 64 KB + SHA-256)...", 0.80f)
+        val dupCandidates = queryMediaStoreBySqlFilter(
+            filter = FileClassifier.buildDuplicatesCandidateSqlFilter(),
+            resolveApkPackage = false
+        )
+        val duplicates = findDuplicatesWithRoomCacheAndParallelism(dupCandidates)
+
+        // 6. Pastas vazias (walkTopDown.maxDepth(3), listFiles uma só vez)
+        updateStep("A verificar pastas vazias...", 0.92f)
         val emptyFolders = scanEmptyFolders()
 
         val groups = persistentListOf(
@@ -171,22 +241,149 @@ class CleanerRepository @Inject constructor(
             )
         )
 
-        val uniqueBytes = groups
+        val allUniqueFiles = groups
             .flatMap { it.files }
             .distinctBy { it.contentUri }
-            .sumOf { it.sizeBytes }
+        val uniqueBytes = allUniqueFiles.sumOf { it.sizeBytes }
 
-        CleanScanReport(
+        val report = CleanScanReport(
             hasMediaPermission = mediaGranted,
             hasManageStoragePermission = manageGranted,
             categories = groups,
             totalCleanableBytes = uniqueBytes,
-            scannedFilesCount = allCandidates.size,
+            scannedFilesCount = maxOf(dupCandidates.size, allUniqueFiles.size),
             timestampMillis = System.currentTimeMillis()
         )
+
+        _scanProgress.value = ScanProgress(
+            isScanning = false,
+            stepText = "Análise concluída",
+            progressFraction = 1f,
+            report = report
+        )
+
+        report
     }
 
-    private fun queryMediaStoreFiles(installedPackages: Set<String>): List<ScannedFileCandidate> {
+    private suspend fun findDuplicatesWithRoomCacheAndParallelism(
+        candidates: List<ScannedFileCandidate>
+    ): List<ScannedFileCandidate> = coroutineScope {
+        val sameSizeGroups = candidates
+            .filter { it.sizeBytes >= FileClassifier.MIN_DUPLICATE_SIZE_BYTES }
+            .groupBy { it.sizeBytes }
+            .values
+            .filter { it.size > 1 }
+
+        if (sameSizeGroups.isEmpty()) return@coroutineScope emptyList()
+
+        val allPotentialFiles = sameSizeGroups.flatten()
+
+        // Carrega cache Room em blocos de 500 IDs
+        val cacheMap = mutableMapOf<Long, FileHashCacheEntity>()
+        allPotentialFiles.map { it.id }.chunked(500).forEach { idBatch ->
+            dao.getCachedFileHashes(idBatch).forEach { entry ->
+                cacheMap[entry.id] = entry
+            }
+        }
+
+        val newCacheEntries = mutableListOf<FileHashCacheEntity>()
+        val duplicateExtras = mutableListOf<ScannedFileCandidate>()
+
+        // Passo 2: Calcula hash parcial (primeiros e últimos 64 KB + tamanho) com paralelismo 4
+        val withPartialHashes = sameSizeGroups.map { group ->
+            group.map { item ->
+                async(hashDispatcher) {
+                    val cached = cacheMap[item.id]
+                    val validCache = cached != null &&
+                        cached.dateModified == item.dateModifiedSeconds &&
+                        cached.size == item.sizeBytes &&
+                        cached.partialHash.isNotBlank()
+
+                    val pHash = if (validCache) {
+                        cached!!.partialHash
+                    } else {
+                        computeUriPartialSha256(Uri.parse(item.contentUri), item.sizeBytes)
+                    }
+
+                    if (pHash != null) {
+                        val existingFull = if (validCache) cached?.fullHash else null
+                        item.copy(partialHash = pHash, sha256Hash = existingFull)
+                    } else {
+                        null
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+
+        // Passo 3: Só para quem colidir no hash parcial, calcula o SHA-256 completo em streaming com paralelismo 4
+        for (group in withPartialHashes) {
+            val byPartial = group.groupBy { it.partialHash }
+            for ((pHash, collidedGroup) in byPartial) {
+                if (pHash != null && collidedGroup.size > 1) {
+                    val withFull = collidedGroup.map { item ->
+                        async(hashDispatcher) {
+                            val fHash = item.sha256Hash ?: computeUriFullSha256Streaming(Uri.parse(item.contentUri))
+                            if (fHash != null) {
+                                synchronized(newCacheEntries) {
+                                    newCacheEntries.add(
+                                        FileHashCacheEntity(
+                                            id = item.id,
+                                            dateModified = item.dateModifiedSeconds,
+                                            size = item.sizeBytes,
+                                            partialHash = pHash,
+                                            fullHash = fHash
+                                        )
+                                    )
+                                }
+                                item.copy(sha256Hash = fHash)
+                            } else {
+                                null
+                            }
+                        }
+                    }.awaitAll().filterNotNull()
+
+                    val byFull = withFull.groupBy { it.sha256Hash }
+                    for ((_, identicalItems) in byFull) {
+                        if (identicalItems.size > 1) {
+                            // Conserva sempre o original mais antigo
+                            val sorted = identicalItems.sortedWith(
+                                compareBy<ScannedFileCandidate> { it.dateModifiedSeconds }
+                                    .thenBy { it.id }
+                            )
+                            duplicateExtras.addAll(sorted.drop(1))
+                        }
+                    }
+                } else if (pHash != null && collidedGroup.size == 1) {
+                    val single = collidedGroup.first()
+                    if (cacheMap[single.id]?.partialHash != pHash) {
+                        newCacheEntries.add(
+                            FileHashCacheEntity(
+                                id = single.id,
+                                dateModified = single.dateModifiedSeconds,
+                                size = single.sizeBytes,
+                                partialHash = pHash,
+                                fullHash = single.sha256Hash
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        if (newCacheEntries.isNotEmpty()) {
+            try {
+                dao.upsertFileHashCacheAll(newCacheEntries)
+            } catch (_: Exception) {
+            }
+        }
+
+        duplicateExtras
+    }
+
+    private fun queryMediaStoreBySqlFilter(
+        filter: MediaStoreSqlFilter,
+        resolveApkPackage: Boolean
+    ): List<ScannedFileCandidate> {
         val results = mutableListOf<ScannedFileCandidate>()
         val filesUri = MediaStore.Files.getContentUri("external")
         val projection = mutableListOf(
@@ -204,15 +401,14 @@ class CleanerRepository @Inject constructor(
             projection.add(MediaStore.Files.FileColumns.DATA)
         }
 
-        val selection = "${MediaStore.Files.FileColumns.SIZE} > 0"
         val sortOrder = "${MediaStore.Files.FileColumns.SIZE} DESC"
 
         try {
             context.contentResolver.query(
                 filesUri,
                 projection.toTypedArray(),
-                selection,
-                null,
+                filter.selection,
+                filter.selectionArgs.toTypedArray().ifEmpty { null },
                 sortOrder
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
@@ -228,16 +424,17 @@ class CleanerRepository @Inject constructor(
                     cursor.getColumnIndex(MediaStore.Files.FileColumns.DATA)
                 }
 
-                while (cursor.moveToNext()) {
+                var count = 0
+                while (cursor.moveToNext() && count < 2500) {
                     val id = cursor.getLong(idCol)
-                    val name = cursor.getString(nameCol) ?: "Ficheiro_$id"
+                    val displayName = cursor.getString(nameCol) ?: "Ficheiro_$id"
                     val size = cursor.getLong(sizeCol)
-                    val dateMod = cursor.getLong(dateCol)
+                    val dateModified = cursor.getLong(dateCol)
                     val mime = cursor.getString(mimeCol) ?: ""
                     val mediaType = cursor.getInt(mediaTypeCol)
                     val relPath = if (pathCol >= 0) cursor.getString(pathCol) ?: "" else ""
 
-                    val itemUri = when (mediaType) {
+                    val contentUri = when (mediaType) {
                         MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE ->
                             ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                         MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO ->
@@ -247,10 +444,8 @@ class CleanerRepository @Inject constructor(
                         else -> ContentUris.withAppendedId(filesUri, id)
                     }
 
-                    val archivePkg = if (name.endsWith(".apk", ignoreCase = true)) {
-                        resolveApkPackageName(relPath, name) ?: installedPackages.firstOrNull {
-                            name.contains(it, ignoreCase = true)
-                        }
+                    val apkPkg = if (resolveApkPackage && (displayName.endsWith(".apk", true) || mime.contains("package-archive"))) {
+                        resolveApkPackageName(relPath, displayName)
                     } else {
                         null
                     }
@@ -258,35 +453,63 @@ class CleanerRepository @Inject constructor(
                     results.add(
                         ScannedFileCandidate(
                             id = id,
-                            contentUri = itemUri.toString(),
-                            displayName = name,
+                            contentUri = contentUri.toString(),
+                            displayName = displayName,
                             relativePath = relPath,
                             sizeBytes = size,
-                            dateModifiedSeconds = dateMod,
+                            dateModifiedSeconds = dateModified,
                             mimeType = mime,
-                            archivePackageName = archivePkg
+                            archivePackageName = apkPkg
                         )
                     )
+                    count++
                 }
             }
         } catch (_: Exception) {
-            // Sem permissão de leitura ainda concedida
         }
-
         return results
     }
 
-    private fun resolveApkPackageName(relativePath: String, fileName: String): String? {
+    private fun scanDownloadsFolderApks(installedPackages: Set<String>): List<ScannedFileCandidate> {
+        val found = mutableListOf<ScannedFileCandidate>()
+        try {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val children = downloadsDir?.listFiles() ?: return emptyList()
+            for (file in children) {
+                if (file.isFile && file.name.endsWith(".apk", ignoreCase = true)) {
+                    val pkgInfo = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+                    val pkg = pkgInfo?.packageName
+                    if (pkg != null && pkg in installedPackages) {
+                        found.add(
+                            ScannedFileCandidate(
+                                id = file.absolutePath.hashCode().toLong(),
+                                contentUri = Uri.fromFile(file).toString(),
+                                displayName = file.name,
+                                relativePath = "Download/",
+                                sizeBytes = file.length(),
+                                dateModifiedSeconds = file.lastModified() / 1000L,
+                                mimeType = "application/vnd.android.package-archive",
+                                archivePackageName = pkg
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return found
+    }
+
+    private fun resolveApkPackageName(relativePath: String, displayName: String): String? {
         return try {
-            val root = Environment.getExternalStorageDirectory()
+            val extRoot = Environment.getExternalStorageDirectory()
             val candidateFile = if (relativePath.startsWith("/")) {
                 File(relativePath)
             } else {
-                File(root, "$relativePath$fileName")
+                File(File(extRoot, relativePath), displayName)
             }
-            if (candidateFile.exists()) {
-                val info = context.packageManager.getPackageArchiveInfo(candidateFile.absolutePath, 0)
-                info?.packageName
+            if (candidateFile.exists() && candidateFile.canRead()) {
+                context.packageManager.getPackageArchiveInfo(candidateFile.absolutePath, 0)?.packageName
             } else {
                 null
             }
@@ -295,60 +518,93 @@ class CleanerRepository @Inject constructor(
         }
     }
 
-    private fun computeContentUriSha256(uri: Uri): String? {
+    /**
+     * Lê apenas os primeiros 64 KB e os últimos 64 KB via FileChannel (sem ler o meio do ficheiro).
+     */
+    private fun computeUriPartialSha256(uri: Uri, sizeBytes: Long): String? {
         return try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val digest = MessageDigest.getInstance("SHA-256")
-                val buffer = ByteArray(8192)
-                var read = input.read(buffer)
-                var totalRead = 0L
-                // Lê até 4 MB para hash rápido e determinístico em ficheiros grandes
-                while (read > 0 && totalRead < 4L * 1024L * 1024L) {
-                    digest.update(buffer, 0, read)
-                    totalRead += read
-                    read = input.read(buffer)
+            val chunkSize = FileClassifier.PARTIAL_HASH_CHUNK_BYTES
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { channel ->
+                    val fileSize = channel.size().coerceAtLeast(sizeBytes)
+                    val firstLen = minOf(chunkSize.toLong(), fileSize).toInt()
+                    val firstBuf = ByteBuffer.allocate(firstLen)
+                    channel.read(firstBuf, 0L)
+
+                    val lastLen = minOf(chunkSize.toLong(), fileSize).toInt()
+                    val lastPos = (fileSize - lastLen).coerceAtLeast(0L)
+                    val lastBuf = ByteBuffer.allocate(lastLen)
+                    channel.read(lastBuf, lastPos)
+
+                    FileClassifier.computePartialSha256(
+                        firstChunk = firstBuf.array(),
+                        lastChunk = lastBuf.array(),
+                        sizeBytes = fileSize
+                    )
                 }
-                digest.digest().joinToString("") { "%02x".format(it) }
             }
         } catch (_: Exception) {
             null
         }
     }
 
-    private fun scanEmptyFolders(): List<String> {
-        val emptyDirs = mutableListOf<String>()
-        val publicDirs = listOf(
-            Environment.DIRECTORY_DOWNLOADS,
-            Environment.DIRECTORY_PICTURES,
-            Environment.DIRECTORY_DCIM,
-            Environment.DIRECTORY_MOVIES,
-            Environment.DIRECTORY_MUSIC,
-            Environment.DIRECTORY_DOCUMENTS
-        )
-        for (dirType in publicDirs) {
-            try {
-                val root = Environment.getExternalStoragePublicDirectory(dirType)
-                if (root != null && root.exists() && root.canRead()) {
-                    root.walkTopDown().maxDepth(3).forEach { dir ->
-                        if (dir != root && dir.isDirectory) {
-                            val children = dir.listFiles()
-                            if (children != null && children.isEmpty()) {
-                                emptyDirs.add(dir.absolutePath)
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-                // Ignora pastas inacessíveis
+    private fun computeUriFullSha256Streaming(uri: Uri): String? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                FileClassifier.computeFullSha256Streaming(stream)
             }
+        } catch (_: Exception) {
+            null
         }
-        return emptyDirs.distinct()
     }
 
-    fun buildTrashIntentSender(uris: List<Uri>, moveToTrash: Boolean): IntentSender? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && uris.isNotEmpty()) {
+    /**
+     * Fase 3: walkTopDown().maxDepth(3), mas sem chamar listFiles() duas vezes por pasta.
+     */
+    private fun scanEmptyFolders(): List<String> {
+        val emptyPaths = mutableListOf<String>()
+        try {
+            val root = Environment.getExternalStorageDirectory()
+            val targetDirs = listOf(
+                File(root, "Download"),
+                File(root, "DCIM"),
+                File(root, "Pictures"),
+                File(root, "Movies"),
+                File(root, "Music"),
+                File(root, "Documents")
+            )
+            for (baseDir in targetDirs) {
+                if (!baseDir.exists() || !baseDir.isDirectory) continue
+                baseDir.walkTopDown()
+                    .maxDepth(3)
+                    .onEnter { dir ->
+                        if (dir == baseDir) return@onEnter true
+                        val children = dir.listFiles() ?: return@onEnter false
+                        if (children.isEmpty()) {
+                            emptyPaths.add(dir.absolutePath)
+                            false // Já sabemos que está vazia; não precisa de continuar nem voltar a chamar listFiles()
+                        } else {
+                            true
+                        }
+                    }
+                    .forEach { _ -> }
+            }
+        } catch (_: Exception) {
+        }
+        return emptyPaths.take(40)
+    }
+
+    fun buildTrashIntentSender(uris: List<Uri>, moveToTrash: Boolean = true): IntentSender? {
+        if (uris.isEmpty()) return null
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
-                MediaStore.createTrashRequest(context.contentResolver, uris, moveToTrash).intentSender
+                val mediaUris = uris.filter { it.scheme == "content" }
+                if (mediaUris.isEmpty()) return null
+                MediaStore.createTrashRequest(
+                    context.contentResolver,
+                    mediaUris,
+                    moveToTrash
+                ).intentSender
             } catch (_: Exception) {
                 null
             }
@@ -365,29 +621,35 @@ class CleanerRepository @Inject constructor(
         for (path in emptyFolders) {
             try {
                 val f = File(path)
-                if (f.exists() && f.isDirectory && f.listFiles()?.isEmpty() == true) {
-                    if (f.delete()) deletedFolders++
+                if (f.exists() && f.isDirectory) {
+                    val items = f.listFiles()
+                    if (items != null && items.isEmpty() && f.delete()) {
+                        deletedFolders++
+                    }
                 }
             } catch (_: Exception) {
             }
         }
 
         val freedBytes = trashedFiles.sumOf { it.sizeBytes }
-        val urisString = trashedFiles.joinToString("|") { it.contentUri }
+        val urisJoined = trashedFiles.joinToString("|") { it.contentUri }
 
         if (trashedFiles.isNotEmpty() || deletedFolders > 0) {
-            val title = if (freedBytes > 0) {
-                "Limpeza · ${NexusFormatters.formatBytes(freedBytes)} para o Lixo"
-            } else {
-                "Limpeza · $deletedFolders pasta(s) vazia(s) removida(s)"
+            val title = buildString {
+                append("Limpeza · ")
+                if (freedBytes > 0L) {
+                    append(NexusFormatters.formatBytes(freedBytes))
+                } else {
+                    append("$deletedFolders pasta(s) vazia(s)")
+                }
             }
             val details = buildString {
                 if (trashedFiles.isNotEmpty()) {
-                    append("${trashedFiles.size} ficheiro(s) movido(s) para o Lixo do sistema (restauráveis por 30 dias).")
+                    append("${trashedFiles.size} ficheiro(s) movido(s) para o Lixo do sistema")
                 }
                 if (deletedFolders > 0) {
-                    if (isNotEmpty()) append(" ")
-                    append("$deletedFolders pasta(s) vazia(s) eliminada(s).")
+                    if (isNotEmpty()) append(" · ")
+                    append("$deletedFolders pasta(s) vazia(s) removida(s)")
                 }
             }
             dao.insertHistory(
@@ -397,7 +659,7 @@ class CleanerRepository @Inject constructor(
                     details = details,
                     timestampEpochMillis = System.currentTimeMillis(),
                     bytesFreed = freedBytes,
-                    trashedUrisJson = urisString,
+                    trashedUrisJson = urisJoined,
                     canRestore = trashedFiles.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
                     isRestored = false
                 )

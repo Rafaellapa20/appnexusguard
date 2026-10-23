@@ -32,4 +32,13 @@ interface NexusGuardDao {
 
     @Query("DELETE FROM battery_samples WHERE timestampEpochMillis < :cutoffMillis")
     suspend fun pruneOldBatterySamples(cutoffMillis: Long)
+
+    @Query("SELECT * FROM file_hash_cache WHERE id IN (:ids)")
+    suspend fun getCachedFileHashes(ids: List<Long>): List<FileHashCacheEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertFileHashCache(entry: FileHashCacheEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertFileHashCacheAll(entries: List<FileHashCacheEntity>)
 }

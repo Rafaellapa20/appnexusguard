@@ -1,8 +1,10 @@
 package com.nexusguard.android.data.local
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
+@Immutable
 @Entity(tableName = "history_entries")
 data class HistoryEntity(
     @PrimaryKey(autoGenerate = true)
@@ -17,6 +19,7 @@ data class HistoryEntity(
     val isRestored: Boolean = false
 )
 
+@Immutable
 @Entity(tableName = "battery_samples")
 data class BatterySampleEntity(
     @PrimaryKey(autoGenerate = true)
@@ -25,4 +28,15 @@ data class BatterySampleEntity(
     val levelPercent: Int,
     val temperatureCelsius: Float,
     val isCharging: Boolean
+)
+
+@Immutable
+@Entity(tableName = "file_hash_cache")
+data class FileHashCacheEntity(
+    @PrimaryKey
+    val id: Long,
+    val dateModified: Long,
+    val size: Long,
+    val partialHash: String,
+    val fullHash: String? = null
 )
