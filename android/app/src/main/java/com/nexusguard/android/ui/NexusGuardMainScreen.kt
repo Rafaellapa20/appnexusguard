@@ -100,6 +100,7 @@ import com.nexusguard.android.BuildConfig
 import com.nexusguard.android.data.local.BatterySampleEntity
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.preferences.UserPreferencesState
+import com.nexusguard.android.data.repository.AppUpdateUiState
 import com.nexusguard.android.data.repository.CleanCategoryGroup
 import com.nexusguard.android.data.repository.CleanCategoryType
 import com.nexusguard.android.data.repository.CleanScanReport
@@ -135,6 +136,17 @@ fun NexusGuardMainScreen(
     val isScanningClean by viewModel.isScanningClean.collectAsStateWithLifecycle()
     val analysisState by viewModel.analysisState.collectAsStateWithLifecycle()
     val boostSession by viewModel.boostSession.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+
+    if (updateState.showUpdateDialog) {
+        AppUpdatePromptDialog(
+            updateState = updateState,
+            onDownloadAndInstall = viewModel::startAppUpdateDownload,
+            onInstallReadyApk = viewModel::installDownloadedUpdate,
+            onOpenBrowser = viewModel::openUpdateInBrowser,
+            onDismiss = viewModel::dismissUpdateDialog
+        )
+    }
 
     if (!preferences.onboardingCompleted) {
         OnboardingScreen(onFinishOnboarding = viewModel::completeOnboarding)
@@ -372,6 +384,8 @@ fun NexusGuardMainScreen(
                     snapshot = snapshot,
                     cleanReport = cleanReport,
                     hasDndPermission = viewModel.hasDndPermission(),
+                    updateState = updateState,
+                    onCheckUpdates = viewModel::checkForUpdatesManual,
                     onToggleDarkTheme = viewModel::setDarkTheme,
                     onToggleWeeklyScan = viewModel::setWeeklyScan,
                     onToggleStorageAlert = viewModel::setStorageAlert,
@@ -2625,6 +2639,191 @@ private fun RealHistoryScreen(
 }
 
 // ============================================================================
+// DIÁLOGO DE ATUALIZAÇÃO AUTOMÁTICA AO ABRIR A APP
+// ============================================================================
+@Composable
+private fun AppUpdatePromptDialog(
+    updateState: AppUpdateUiState,
+    onDownloadAndInstall: () -> Unit,
+    onInstallReadyApk: () -> Unit,
+    onOpenBrowser: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = NexusTheme.colors
+    val remote = updateState.remoteInfo
+
+    AlertDialog(
+        onDismissRequest = {
+            if (!updateState.isDownloading) {
+                onDismiss()
+            }
+        },
+        containerColor = colors.surface,
+        titleContentColor = colors.text,
+        textContentColor = colors.textDim,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GaugeShieldLogo(size = 32.dp)
+                Column {
+                    Text(
+                        text = if (updateState.isNewerThanInstalled) {
+                            "Nova atualização disponível"
+                        } else {
+                            "Atualização do Nexus Guard"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.text
+                    )
+                    Text(
+                        text = "Repositório oficial · GitHub",
+                        style = NexusMonoTextStyles.badge,
+                        color = colors.accent2
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.bgRaised)
+                        .border(1.dp, colors.border, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Instalada",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textMuted
+                        )
+                        Text(
+                            text = "v${updateState.currentVersionName} (${updateState.currentVersionCode})",
+                            style = NexusMonoTextStyles.metricSmall,
+                            color = colors.textDim
+                        )
+                    }
+                    Text(
+                        text = "→",
+                        style = NexusMonoTextStyles.metricMedium,
+                        color = colors.accent2
+                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "Disponível",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textMuted
+                        )
+                        Text(
+                            text = "v${remote?.versionName ?: updateState.currentVersionName} (${remote?.versionCode ?: updateState.currentVersionCode})",
+                            style = NexusMonoTextStyles.metricSmall,
+                            color = colors.ok
+                        )
+                    }
+                }
+
+                if (!remote?.releaseNotes.isNullOrBlank()) {
+                    Text(
+                        text = "Novidades desta versão:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.text
+                    )
+                    Text(
+                        text = remote?.releaseNotes.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textDim
+                    )
+                }
+
+                if (updateState.isDownloading) {
+                    val pct = (updateState.downloadProgress * 100f).toInt()
+                    val dlStr = NexusFormatters.formatBytes(updateState.downloadedBytes)
+                    val totalStr = if (updateState.totalBytes > 0L) {
+                        NexusFormatters.formatBytes(updateState.totalBytes)
+                    } else {
+                        "..."
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "A transferir APK...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.accent2
+                            )
+                            Text(
+                                text = "$pct % ($dlStr / $totalStr)",
+                                style = NexusMonoTextStyles.badge,
+                                color = colors.text
+                            )
+                        }
+                        LinearProgressIndicator(
+                            progress = { updateState.downloadProgress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            color = colors.accent2,
+                            trackColor = colors.surfaceAlt
+                        )
+                    }
+                }
+
+                updateState.statusMessage?.let { msg ->
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.accent2
+                    )
+                }
+
+                updateState.errorMessage?.let { err ->
+                    Text(
+                        text = err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.danger
+                    )
+                }
+
+                if (updateState.downloadedApkFile != null && !updateState.isDownloading) {
+                    NexusPrimaryGradientButton(
+                        text = "Instalar atualização transferida",
+                        onClick = onInstallReadyApk
+                    )
+                } else if (!updateState.isDownloading) {
+                    NexusPrimaryGradientButton(
+                        text = "Atualizar agora",
+                        onClick = onDownloadAndInstall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (!updateState.isDownloading) {
+                TextButton(onClick = onOpenBrowser) {
+                    Text("Abrir no navegador", color = colors.accent2)
+                }
+            }
+        },
+        dismissButton = {
+            if (!updateState.isDownloading) {
+                TextButton(onClick = onDismiss) {
+                    Text("Mais tarde", color = colors.textMuted)
+                }
+            }
+        }
+    )
+}
+
+// ============================================================================
 // DEFINIÇÕES REAIS (Tema, Notificações, Agendamento, Permissões e Licença)
 // ============================================================================
 @Composable
@@ -2633,6 +2832,8 @@ private fun RealSettingsScreen(
     snapshot: RealSystemSnapshot,
     cleanReport: CleanScanReport,
     hasDndPermission: Boolean,
+    updateState: AppUpdateUiState,
+    onCheckUpdates: () -> Unit,
     onToggleDarkTheme: (Boolean) -> Unit,
     onToggleWeeklyScan: (Boolean) -> Unit,
     onToggleStorageAlert: (Boolean) -> Unit,
@@ -2650,6 +2851,42 @@ private fun RealSettingsScreen(
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Cartão de Atualizações Diretas via GitHub
+        NexusCard(
+            backgroundColor = colors.surface,
+            borderColor = colors.accent.copy(alpha = 0.45f)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Atualizações da Aplicação",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.text
+                    )
+                    Text(
+                        text = "Instalada: v${BuildConfig.VERSION_NAME} (código ${BuildConfig.VERSION_CODE})",
+                        style = NexusMonoTextStyles.metricSmall,
+                        color = colors.accent2
+                    )
+                }
+                if (updateState.isChecking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = colors.accent2
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            NexusPrimaryGradientButton(
+                text = "Procurar atualizações agora",
+                onClick = onCheckUpdates
+            )
+        }
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border

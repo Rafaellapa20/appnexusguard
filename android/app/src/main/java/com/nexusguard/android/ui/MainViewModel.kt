@@ -11,6 +11,8 @@ import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.data.preferences.UserPreferencesRepository
 import com.nexusguard.android.data.preferences.UserPreferencesState
+import com.nexusguard.android.data.repository.AppUpdateUiState
+import com.nexusguard.android.data.repository.AppUpdaterRepository
 import com.nexusguard.android.data.repository.CleanCategoryType
 import com.nexusguard.android.data.repository.CleanScanReport
 import com.nexusguard.android.data.repository.CleanerRepository
@@ -54,13 +56,16 @@ data class OneClickAnalysisState(
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
-    @ApplicationContext private val appContext: Context,
+    @param:ApplicationContext private val appContext: Context,
     private val preferencesRepository: UserPreferencesRepository,
     private val sensorsRepository: SystemSensorsRepository,
     private val cleanerRepository: CleanerRepository,
     private val boostManager: GameBoostManager,
+    private val appUpdaterRepository: AppUpdaterRepository,
     private val dao: NexusGuardDao
 ) : ViewModel() {
+
+    val updateState: StateFlow<AppUpdateUiState> = appUpdaterRepository.updateState
 
     val preferencesState: StateFlow<UserPreferencesState> = preferencesRepository.preferencesFlow
         .stateIn(
@@ -115,6 +120,35 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(appContext, true)
             refreshCleanScan()
+        }
+        viewModelScope.launch {
+            appUpdaterRepository.checkForUpdates(isStartupCheck = true)
+        }
+    }
+
+    fun checkForUpdatesManual() {
+        viewModelScope.launch {
+            appUpdaterRepository.checkForUpdates(isStartupCheck = false)
+        }
+    }
+
+    fun startAppUpdateDownload() {
+        viewModelScope.launch {
+            appUpdaterRepository.downloadAndInstallUpdate()
+        }
+    }
+
+    fun installDownloadedUpdate() {
+        appUpdaterRepository.installDownloadedApkIfReady()
+    }
+
+    fun openUpdateInBrowser() {
+        appUpdaterRepository.openBrowserFallback()
+    }
+
+    fun dismissUpdateDialog() {
+        viewModelScope.launch {
+            appUpdaterRepository.dismissUpdateDialog()
         }
     }
 

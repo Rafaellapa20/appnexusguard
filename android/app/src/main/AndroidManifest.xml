@@ -2,7 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Sem permissão INTERNET: 100% local, sem analytics nem anúncios -->
+    <!-- Permissão INTERNET usada exclusivamente para verificar e transferir atualizações da app via GitHub -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Permissão para instalar atualizações de APK transferidas pela própria aplicação -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Estatísticas de uso de apps e tamanho de armazenamento (pedidas sob demanda) -->
     <uses-permission
@@ -63,6 +67,17 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="game_boost_thermal_and_dnd_monitor" />
         </service>
+
+        <!-- FileProvider para instalar atualizações de APK e partilhar relatórios -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- Desativa inicializador automático do WorkManager para suportar HiltWorkerFactory -->
         <provider

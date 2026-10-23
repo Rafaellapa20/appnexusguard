@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -17,7 +18,8 @@ data class UserPreferencesState(
     val storageAlertEnabled: Boolean = true,
     val thermalAlertEnabled: Boolean = true,
     val batteryAlertEnabled: Boolean = true,
-    val taskFinishedNotificationEnabled: Boolean = true
+    val taskFinishedNotificationEnabled: Boolean = true,
+    val lastConfirmedUpdateCode: Int = 0
 )
 
 @Singleton
@@ -32,6 +34,7 @@ class UserPreferencesRepository @Inject constructor(
         val THERMAL_ALERT_ENABLED = booleanPreferencesKey("thermal_alert_enabled")
         val BATTERY_ALERT_ENABLED = booleanPreferencesKey("battery_alert_enabled")
         val TASK_FINISHED_NOTIFICATION = booleanPreferencesKey("task_finished_notification")
+        val LAST_CONFIRMED_UPDATE_CODE = intPreferencesKey("last_confirmed_update_code")
     }
 
     val preferencesFlow: Flow<UserPreferencesState> = dataStore.data.map { prefs ->
@@ -43,7 +46,8 @@ class UserPreferencesRepository @Inject constructor(
             storageAlertEnabled = prefs[Keys.STORAGE_ALERT_ENABLED] ?: true,
             thermalAlertEnabled = prefs[Keys.THERMAL_ALERT_ENABLED] ?: true,
             batteryAlertEnabled = prefs[Keys.BATTERY_ALERT_ENABLED] ?: true,
-            taskFinishedNotificationEnabled = prefs[Keys.TASK_FINISHED_NOTIFICATION] ?: true
+            taskFinishedNotificationEnabled = prefs[Keys.TASK_FINISHED_NOTIFICATION] ?: true,
+            lastConfirmedUpdateCode = prefs[Keys.LAST_CONFIRMED_UPDATE_CODE] ?: 0
         )
     }
 
@@ -86,6 +90,12 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun setTaskFinishedNotificationEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.TASK_FINISHED_NOTIFICATION] = enabled
+        }
+    }
+
+    suspend fun setLastConfirmedUpdateCode(versionCode: Int) {
+        dataStore.edit { prefs ->
+            prefs[Keys.LAST_CONFIRMED_UPDATE_CODE] = versionCode
         }
     }
 }

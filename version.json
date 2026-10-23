@@ -1,0 +1,7 @@
+{
+  "versionCode": 2,
+  "versionName": "1.1.0-full",
+  "apkUrl": "https://github.com/Rafaellapa20/appnexusguard/raw/main/NexusGuard-full-debug.apk",
+  "releaseNotes": "• Dados 100% reais nos sensores, bateria, estado térmico e RAM\n• Limpeza real via MediaStore com Lixo do sistema e Duplicados SHA-256\n• Modo Jogo com serviço em primeiro plano e Não Incomodar\n• Histórico Room, exportação PDF e atualizador automático ao abrir a app",
+  "publishedAt": "23/10/2026"
+}
