@@ -148,7 +148,8 @@ fun CleanScreen(
     onTrashConfirmed: (List<ScannedFileCandidate>, List<String>) -> Unit,
     onDismissCompletion: () -> Unit = {},
     buildRestoreCompletionIntent: (DeepCleanCompletionResult) -> IntentSender? = { null },
-    onRestoreConfirmed: (Long) -> Unit = {}
+    onRestoreConfirmed: (Long) -> Unit = {},
+    additionalToolsContent: (@Composable () -> Unit)? = null
 ) {
     val colors = NexusTheme.colors
     val context = LocalContext.current
@@ -641,6 +642,11 @@ fun CleanScreen(
                                     )
                                 }
                             }
+                        }
+
+                        if (additionalToolsContent != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            additionalToolsContent()
                         }
                     }
 

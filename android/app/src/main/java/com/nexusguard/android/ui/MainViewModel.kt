@@ -11,6 +11,7 @@ import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.data.preferences.UserPreferencesRepository
 import com.nexusguard.android.data.preferences.UserPreferencesState
+import com.nexusguard.android.data.repository.AdditionalCleanRepository
 import com.nexusguard.android.data.repository.AppImpactRepository
 import com.nexusguard.android.data.repository.AppUpdateUiState
 import com.nexusguard.android.data.repository.AppUpdaterRepository
@@ -23,11 +24,14 @@ import com.nexusguard.android.data.repository.SystemSensorsRepository
 import com.nexusguard.android.domain.AppImpactItem
 import com.nexusguard.android.domain.AppImpactPeriod
 import com.nexusguard.android.domain.NexusFormatters
+import com.nexusguard.android.domain.PhotoOptimizeQuality
+import com.nexusguard.android.domain.PhotoOptimizerCandidate
 import com.nexusguard.android.domain.ScannedFileCandidate
 import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.service.BoostSessionState
 import com.nexusguard.android.service.ChargeMonitorForegroundService
 import com.nexusguard.android.service.GameBoostManager
+import com.nexusguard.android.ui.clean.AdditionalCleanToolsState
 import com.nexusguard.android.util.PdfReportExporter
 import com.nexusguard.android.widget.NexusWidgetUpdater
 import com.nexusguard.android.worker.BatterySampleWorker
@@ -52,6 +56,7 @@ class MainViewModel @Inject constructor(
     private val preferencesRepository: UserPreferencesRepository,
     private val sensorsRepository: SystemSensorsRepository,
     private val cleanerRepository: CleanerRepository,
+    private val additionalCleanRepository: AdditionalCleanRepository,
     private val appImpactRepository: AppImpactRepository,
     private val batteryProfileManager: BatteryProfileManager,
     private val boostManager: GameBoostManager,
@@ -194,6 +199,14 @@ class MainViewModel @Inject constructor(
     private val _appsImpactUiState = MutableStateFlow(AppsImpactUiState(isLoading = true))
     val appsImpactUiState: StateFlow<AppsImpactUiState> = _appsImpactUiState.asStateFlow()
 
+    private val _additionalCleanToolsState = MutableStateFlow(
+        AdditionalCleanToolsState(
+            isCallLogAvailable = additionalCleanRepository.isCallLogCleanerAvailable,
+            hasCallLogPermissions = additionalCleanRepository.hasCallLogPermissions()
+        )
+    )
+    val additionalCleanToolsState: StateFlow<AdditionalCleanToolsState> = _additionalCleanToolsState.asStateFlow()
+
     init {
         viewModelScope.launch {
             SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(appContext, true)
@@ -228,6 +241,10 @@ class MainViewModel @Inject constructor(
     fun onAppResumed() {
         _hasDndPermission.value = boostManager.hasDndPermission()
         _hasWriteSettingsPermission.value = batteryProfileManager.hasWriteSettingsPermission()
+        _additionalCleanToolsState.value = _additionalCleanToolsState.value.copy(
+            hasClipboardContent = additionalCleanRepository.hasClipboardContent(),
+            hasCallLogPermissions = additionalCleanRepository.hasCallLogPermissions()
+        )
         appUpdaterRepository.onAppResumed()
         viewModelScope.launch {
             sensorsRepository.refreshSlowMetrics(force = false)
@@ -256,6 +273,86 @@ class MainViewModel @Inject constructor(
      */
     fun onEnterCleanTab() {
         refreshCleanScan(force = false)
+        refreshAdditionalCleanTools()
+    }
+
+    fun refreshAdditionalCleanTools(
+        quality: PhotoOptimizeQuality = _additionalCleanToolsState.value.selectedQuality,
+        limitMax4000px: Boolean = _additionalCleanToolsState.value.limitMaxResolution4000px,
+        callLogMonths: Int = _additionalCleanToolsState.value.callLogMonthsThreshold
+    ) {
+        viewModelScope.launch {
+            val hasClip = additionalCleanRepository.hasClipboardContent()
+            val downloads = additionalCleanRepository.scanDownloadsFolder()
+            val videos = additionalCleanRepository.scanLargeVideos()
+            val photos = additionalCleanRepository.scanLargePhotosForOptimizer(quality, limitMax4000px)
+            val browsers = additionalCleanRepository.getBrowserPrivacyShortcuts()
+            val hasCallPerms = additionalCleanRepository.hasCallLogPermissions()
+            val oldCallsCount = if (hasCallPerms) {
+                additionalCleanRepository.countOldCallLogs(callLogMonths)
+            } else 0
+            _additionalCleanToolsState.value = AdditionalCleanToolsState(
+                hasClipboardContent = hasClip,
+                downloads = downloads,
+                largeVideos = videos,
+                photoCandidates = photos,
+                selectedQuality = quality,
+                limitMaxResolution4000px = limitMax4000px,
+                isOptimizingPhotos = false,
+                browserShortcuts = browsers,
+                isCallLogAvailable = additionalCleanRepository.isCallLogCleanerAvailable,
+                hasCallLogPermissions = hasCallPerms,
+                oldCallLogsCount = oldCallsCount,
+                callLogMonthsThreshold = callLogMonths
+            )
+        }
+    }
+
+    fun clearClipboardContent() {
+        viewModelScope.launch {
+            additionalCleanRepository.clearClipboard()
+            _additionalCleanToolsState.value = _additionalCleanToolsState.value.copy(
+                hasClipboardContent = additionalCleanRepository.hasClipboardContent()
+            )
+        }
+    }
+
+    fun setPhotoOptimizerOptions(quality: PhotoOptimizeQuality, limitMax4000px: Boolean) {
+        refreshAdditionalCleanTools(quality = quality, limitMax4000px = limitMax4000px)
+    }
+
+    fun optimizeSelectedPhotos(
+        candidates: List<PhotoOptimizerCandidate>,
+        onFinished: (Int, Long) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val current = _additionalCleanToolsState.value
+            _additionalCleanToolsState.value = current.copy(isOptimizingPhotos = true)
+            val (count, saved) = additionalCleanRepository.optimizeSelectedPhotos(
+                candidates = candidates,
+                quality = current.selectedQuality,
+                limitMax4000px = current.limitMaxResolution4000px
+            )
+            onFinished(count, saved)
+            refreshAdditionalCleanTools()
+            sensorsRepository.refreshSlowMetrics(force = true)
+        }
+    }
+
+    fun setCallLogMonthsThreshold(months: Int) {
+        refreshAdditionalCleanTools(callLogMonths = months)
+    }
+
+    fun deleteOldCallLogs(months: Int, onResult: (Int) -> Unit = {}) {
+        viewModelScope.launch {
+            val deleted = additionalCleanRepository.deleteOldCallLogs(months)
+            onResult(deleted)
+            refreshAdditionalCleanTools(callLogMonths = months)
+        }
+    }
+
+    fun onCallLogPermissionsUpdated() {
+        refreshAdditionalCleanTools()
     }
 
     fun onEnterAppsImpactTab() {

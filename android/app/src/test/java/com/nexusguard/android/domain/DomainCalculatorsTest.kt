@@ -527,4 +527,39 @@ class DomainCalculatorsTest {
         assertEquals("com.unused.95", removed.first().packageName)
         assertEquals(250_000_000L, freedBytes)
     }
+
+    @Test
+    fun `photo optimizer calculator selects photos over 3MB scales above 4000px and estimates savings`() {
+        assertTrue(PhotoOptimizerCalculator.isEligiblePhoto(5L * 1024 * 1024, "image/jpeg", "IMG_1.jpg"))
+        assertTrue(PhotoOptimizerCalculator.isEligiblePhoto(4L * 1024 * 1024, "image/heic", "IMG_2.heic"))
+        assertFalse(PhotoOptimizerCalculator.isEligiblePhoto(2L * 1024 * 1024, "image/jpeg", "SMALL.jpg"))
+        assertFalse(PhotoOptimizerCalculator.isEligiblePhoto(8L * 1024 * 1024, "image/png", "SCREEN.png"))
+
+        val (wScaled, hScaled) = PhotoOptimizerCalculator.calculateTargetDimensions(
+            originalWidth = 8000,
+            originalHeight = 6000,
+            limitMax4000px = true
+        )
+        assertEquals(4000, wScaled)
+        assertEquals(3000, hScaled)
+
+        val (wUnchanged, hUnchanged) = PhotoOptimizerCalculator.calculateTargetDimensions(
+            originalWidth = 8000,
+            originalHeight = 6000,
+            limitMax4000px = false
+        )
+        assertEquals(8000, wUnchanged)
+        assertEquals(6000, hUnchanged)
+
+        val origBytes = 6L * 1024 * 1024 // 6 MB
+        val saved80 = PhotoOptimizerCalculator.estimateSavedBytes(origBytes, 80, 4000, 3000, false)
+        val saved90 = PhotoOptimizerCalculator.estimateSavedBytes(origBytes, 90, 4000, 3000, false)
+        assertTrue("Qualidade 80% deve poupar mais do que 90%", saved80 > saved90)
+        assertEquals(30, PhotoOptimizerCalculator.TRASH_RETENTION_DAYS)
+
+        val dl1 = DownloadFileItem(1L, "u1", "a.apk", 10_000L, 100L, "application/vnd.android.package-archive", "APK", 10)
+        val dl2 = DownloadFileItem(2L, "u2", "b.pdf", 90_000L, 50L, "application/pdf", "Documento", 45)
+        assertEquals(listOf(dl2, dl1), PhotoOptimizerCalculator.sortDownloads(listOf(dl1, dl2), DownloadsSortOrder.BY_SIZE_DESC))
+        assertEquals(listOf(dl2, dl1), PhotoOptimizerCalculator.sortDownloads(listOf(dl1, dl2), DownloadsSortOrder.BY_AGE_OLDEST))
+    }
 }

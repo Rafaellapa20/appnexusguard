@@ -45,6 +45,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.nexusguard.android.ui.apps.AppsImpactScreen
 import com.nexusguard.android.ui.battery.BatteryScreen
+import com.nexusguard.android.ui.clean.AdditionalCleanSection
 import com.nexusguard.android.ui.clean.CleanScreen
 import com.nexusguard.android.ui.components.NexusTopBar
 import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
@@ -285,19 +286,37 @@ fun NexusGuardMainScreen(
             }
             composable(NexusTab.CLEAN.route) {
                 val cleanUiState by viewModel.cleanUiState.collectAsStateWithLifecycle()
+                val additionalToolsState by viewModel.additionalCleanToolsState.collectAsStateWithLifecycle()
                 LaunchedEffect(Unit) {
                     viewModel.onEnterCleanTab()
                 }
                 CleanScreen(
                     uiState = cleanUiState,
-                    onRefreshScan = { viewModel.refreshCleanScan(force = true) },
+                    onRefreshScan = {
+                        viewModel.refreshCleanScan(force = true)
+                        viewModel.refreshAdditionalCleanTools()
+                    },
                     onCancelScan = viewModel::cancelCleanScan,
                     onAppCacheCleared = viewModel::onAppCacheClearFinished,
                     buildTrashIntent = viewModel::buildMoveToTrashIntentSender,
                     onTrashConfirmed = viewModel::onTrashRequestConfirmed,
                     onDismissCompletion = viewModel::dismissCompletionScreen,
                     buildRestoreCompletionIntent = viewModel::buildRestoreFromCompletionIntentSender,
-                    onRestoreConfirmed = viewModel::onRestoreConfirmed
+                    onRestoreConfirmed = viewModel::onRestoreConfirmed,
+                    additionalToolsContent = {
+                        AdditionalCleanSection(
+                            state = additionalToolsState,
+                            onClearClipboard = viewModel::clearClipboardContent,
+                            onRefreshTools = { viewModel.refreshAdditionalCleanTools() },
+                            onPhotoOptionsChanged = viewModel::setPhotoOptimizerOptions,
+                            onOptimizePhotos = viewModel::optimizeSelectedPhotos,
+                            onCallLogMonthsChanged = viewModel::setCallLogMonthsThreshold,
+                            onDeleteOldCallLogs = viewModel::deleteOldCallLogs,
+                            onCallLogPermissionsResult = viewModel::onCallLogPermissionsUpdated,
+                            buildTrashIntent = viewModel::buildMoveToTrashIntentSender,
+                            onTrashConfirmed = viewModel::onTrashRequestConfirmed
+                        )
+                    }
                 )
             }
             composable(NexusTab.APPS.route) {
