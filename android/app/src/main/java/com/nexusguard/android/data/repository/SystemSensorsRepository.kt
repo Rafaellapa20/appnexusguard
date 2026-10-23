@@ -3,6 +3,7 @@ package com.nexusguard.android.data.repository
 import android.app.ActivityManager
 import android.app.AppOpsManager
 import android.app.usage.StorageStatsManager
+import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -17,36 +18,46 @@ import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
 import android.os.storage.StorageManager
-import android.provider.MediaStore
+import androidx.compose.runtime.Immutable
+import androidx.core.content.ContextCompat
 import com.nexusguard.android.BuildConfig
 import com.nexusguard.android.data.local.BatterySampleEntity
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.domain.HealthScoreCalculator
-import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.SystemHealthInputs
 import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.domain.ThermalStatusMapper
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executor
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
 
+@Immutable
 data class LiveBatteryMetrics(
     val levelPercent: Int,
     val temperatureCelsius: Float?,
@@ -60,12 +71,14 @@ data class LiveBatteryMetrics(
     val detailLineText: String
 )
 
+@Immutable
 data class LiveThermalMetrics(
     val level: ThermalLevelPt,
     val headroomValue: Float?,
     val headroomText: String
 )
 
+@Immutable
 data class LiveStorageMetrics(
     val freeBytes: Long,
     val totalBytes: Long,
@@ -73,9 +86,11 @@ data class LiveStorageMetrics(
     val appsAndSystemBytes: Long,
     val photosBytes: Long,
     val videosBytes: Long,
-    val otherMediaBytes: Long
+    val otherMediaBytes: Long,
+    val externalStatsAvailable: Boolean = false
 )
 
+@Immutable
 data class InstalledAppUsageInfo(
     val packageName: String,
     val appName: String,
@@ -88,8 +103,10 @@ data class InstalledAppUsageInfo(
     val isUnused30Days: Boolean
 )
 
+@Immutable
 data class RealSystemSnapshot(
-    val healthScore: Int = 100,
+    val isLoading: Boolean = false,
+    val healthScore: Int = 0,
     val healthLabel: String = "A ler sensores...",
     val battery: LiveBatteryMetrics = LiveBatteryMetrics(
         levelPercent = 0,
@@ -98,8 +115,8 @@ data class RealSystemSnapshot(
         isHealthy = true,
         voltageMv = 0,
         isCharging = false,
-        cycleCountText = "—",
-        cycleCountReason = "",
+        cycleCountText = "N/D",
+        cycleCountReason = "A ler...",
         statusLineText = "A ler estado da bateria...",
         detailLineText = ""
     ),
@@ -108,38 +125,194 @@ data class RealSystemSnapshot(
         headroomValue = null,
         headroomText = "A ler..."
     ),
-    val storage: LiveStorageMetrics = LiveStorageMetrics(0, 0, 0, 0, 0, 0, 0),
+    val storage: LiveStorageMetrics = LiveStorageMetrics(0, 0, 0, 0, 0, 0, 0, false),
     val availableRamBytes: Long = 0L,
     val totalRamBytes: Long = 0L,
     val hasUsageStatsPermission: Boolean = false,
-    val installedApps: List<InstalledAppUsageInfo> = emptyList(),
+    val installedApps: ImmutableList<InstalledAppUsageInfo> = persistentListOf(),
     val unusedAppsCount: Int = 0,
     val highBackgroundAppsCount: Int = 0,
-    val tempHistory60s: List<Float> = emptyList(),
-    val lastUpdatedMillis: Long = System.currentTimeMillis()
+    val tempHistory60s: ImmutableList<Float> = persistentListOf(),
+    val lastUpdatedMillis: Long = 0L
+)
+
+private data class SlowAppsState(
+    val hasUsagePermission: Boolean = false,
+    val apps: ImmutableList<InstalledAppUsageInfo> = persistentListOf()
 )
 
 @Singleton
 class SystemSensorsRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val dao: NexusGuardDao
 ) {
+    companion object {
+        private const val SLOW_REFRESH_COOLDOWN_MS = 5 * 60_000L // 5 minutos
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val tempWindow = ArrayDeque<Float>(30)
     private var lastSampleSavedMillis = 0L
+    private var lastSlowRefreshMillis = 0L
 
-    val liveSnapshot: StateFlow<RealSystemSnapshot> = flow {
-        while (true) {
-            val snapshot = withContext(Dispatchers.IO) {
-                readCurrentSnapshot()
+    // Cache em memória dos tamanhos das apps com chave "packageName:lastUpdateTime"
+    private val appSizeCache = ConcurrentHashMap<String, Long>()
+
+    private val _storageState = MutableStateFlow(LiveStorageMetrics(0, 0, 0, 0, 0, 0, 0, false))
+    val storageFlow: StateFlow<LiveStorageMetrics> = _storageState
+
+    private val _appsState = MutableStateFlow(SlowAppsState())
+    private val appsFlow: StateFlow<SlowAppsState> = _appsState
+
+    private val _tempHistoryState = MutableStateFlow<ImmutableList<Float>>(persistentListOf())
+
+    /**
+     * Fluxo rápido 1: Bateria via BroadcastReceiver(ACTION_BATTERY_CHANGED), emite só quando muda.
+     */
+    val batteryFlow: Flow<LiveBatteryMetrics> = callbackFlow {
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val initialIntent = ContextCompat.registerReceiver(
+            context,
+            null,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        trySend(parseBatteryIntent(initialIntent))
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                val metrics = parseBatteryIntent(intent)
+                trySend(metrics)
             }
-            emit(snapshot)
-            delay(2_000L) // Atualiza sensores e gráfico de 60s a cada 2 segundos
         }
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        awaitClose {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {
+            }
+        }
+    }.distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    /**
+     * Fluxo rápido 2: Estado térmico via PowerManager.addThermalStatusListener (API 29+)
+     * e getThermalHeadroom a cada 2 s apenas enquanto houver subscritores.
+     * Também regista a amostra real de temperatura de 2 em 2 s na janela de 60 s (máx. 30 amostras).
+     */
+    val thermalFlow: Flow<LiveThermalMetrics> = callbackFlow {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        var currentLevel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ThermalStatusMapper.fromPowerManagerStatus(powerManager.currentThermalStatus)
+        } else {
+            ThermalLevelPt.INDISPONIVEL
+        }
+
+        val listener = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            PowerManager.OnThermalStatusChangedListener { status ->
+                currentLevel = ThermalStatusMapper.fromPowerManagerStatus(status)
+                trySend(buildThermalMetrics(powerManager, currentLevel))
+            }
+        } else {
+            null
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && listener != null) {
+            try {
+                powerManager.addThermalStatusListener(Executor { it.run() }, listener)
+            } catch (_: Exception) {
+            }
+        }
+
+        val headroomJob = launch(Dispatchers.IO) {
+            while (true) {
+                trySend(buildThermalMetrics(powerManager, currentLevel))
+                recordCurrentBatteryTempSample()
+                delay(2_000L)
+            }
+        }
+
+        awaitClose {
+            headroomJob.cancel()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && listener != null) {
+                try {
+                    powerManager.removeThermalStatusListener(listener)
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }.distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    /**
+     * Fluxo rápido 3: Memória RAM (ActivityManager.MemoryInfo) a cada 2 s apenas enquanto houver subscritores.
+     */
+    val memoryFlow: Flow<Pair<Long, Long>> = flow {
+        while (true) {
+            emit(readMemoryMetrics())
+            delay(2_000L)
+        }
+    }.distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    init {
+        scope.launch(Dispatchers.IO) {
+            refreshSlowMetrics(force = true)
+            while (true) {
+                delay(SLOW_REFRESH_COOLDOWN_MS)
+                refreshSlowMetrics(force = true)
+            }
+        }
+    }
+
+    val liveSnapshot: StateFlow<RealSystemSnapshot> = combine(
+        batteryFlow,
+        thermalFlow,
+        memoryFlow,
+        storageFlow,
+        appsFlow
+    ) { battery, thermal, memory, storage, appsState ->
+        val (availRam, totalRam) = memory
+        val unusedAppsCount = appsState.apps.count { it.isUnused30Days }
+        val activeBgCount = appsState.apps.count { it.foregroundTimeMillis > 15 * 60_000L }
+
+        val score = HealthScoreCalculator.calculateScore(
+            SystemHealthInputs(
+                freeStorageBytes = storage.freeBytes,
+                totalStorageBytes = storage.totalBytes,
+                thermalLevel = thermal.level,
+                batteryTempCelsius = battery.temperatureCelsius,
+                isBatteryHealthy = battery.isHealthy,
+                unusedAppsOver30Days = unusedAppsCount,
+                availableMemoryBytes = availRam,
+                totalMemoryBytes = totalRam
+            )
+        )
+
+        val isStillLoading = storage.totalBytes == 0L && appsState.apps.isEmpty()
+
+        RealSystemSnapshot(
+            isLoading = isStillLoading,
+            healthScore = score,
+            healthLabel = HealthScoreCalculator.statusLabelPt(score),
+            battery = battery,
+            thermal = thermal,
+            storage = storage,
+            availableRamBytes = availRam,
+            totalRamBytes = totalRam,
+            hasUsageStatsPermission = appsState.hasUsagePermission,
+            installedApps = appsState.apps,
+            unusedAppsCount = unusedAppsCount,
+            highBackgroundAppsCount = activeBgCount,
+            tempHistory60s = _tempHistoryState.value,
+            lastUpdatedMillis = System.currentTimeMillis()
+        )
     }.stateIn(
         scope = scope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = RealSystemSnapshot()
+        initialValue = RealSystemSnapshot(isLoading = true)
     )
 
     fun observeBatterySamples24h(): Flow<List<BatterySampleEntity>> = dao.observeRecentBatterySamples()
@@ -163,45 +336,48 @@ class SystemSensorsRepository @Inject constructor(
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    suspend fun readCurrentSnapshot(): RealSystemSnapshot = withContext(Dispatchers.IO) {
-        val battery = readBatteryMetrics()
-        val thermal = readThermalMetrics()
-        val storage = readStorageMetrics()
-        val (availRam, totalRam) = readMemoryMetrics()
+    /**
+     * Atualiza armazenamento e lista de apps instaladas apenas no arranque, no ON_RESUME (com cooldown de 5 min)
+     * ou após uma limpeza (force = true).
+     */
+    suspend fun refreshSlowMetrics(force: Boolean = false) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
         val usageGranted = hasUsageStatsPermission()
+        val permissionChanged = usageGranted != _appsState.value.hasUsagePermission
+
+        if (!force && !permissionChanged && (now - lastSlowRefreshMillis) < SLOW_REFRESH_COOLDOWN_MS) {
+            return@withContext
+        }
+        lastSlowRefreshMillis = now
+
+        val storage = readStorageMetrics(usageGranted)
+        _storageState.value = storage
+
         val apps = readInstalledAppsUsage(usageGranted)
-        val unusedApps = apps.filter { it.isUnused30Days }
-        val activeBgApps = if (usageGranted) {
-            apps.filter { it.foregroundTimeMillis > 15 * 60_000L }.take(10)
+        _appsState.value = SlowAppsState(
+            hasUsagePermission = usageGranted,
+            apps = apps
+        )
+    }
+
+    /**
+     * Mantido para compatibilidade com chamadas explícitas (ex.: Worker / Análise com 1 clique).
+     */
+    suspend fun readCurrentSnapshot(): RealSystemSnapshot = withContext(Dispatchers.IO) {
+        refreshSlowMetrics(force = true)
+        val battery = readBatteryMetricsOnce()
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val level = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ThermalStatusMapper.fromPowerManagerStatus(powerManager.currentThermalStatus)
         } else {
-            apps.take(10)
+            ThermalLevelPt.INDISPONIVEL
         }
-
-        // Atualiza janela deslizante de 60 segundos (30 amostras x 2s)
-        battery.temperatureCelsius?.let { temp ->
-            synchronized(tempWindow) {
-                if (tempWindow.size >= 30) {
-                    tempWindow.removeFirst()
-                }
-                tempWindow.addLast(temp)
-            }
-
-            val now = System.currentTimeMillis()
-            if (now - lastSampleSavedMillis >= 60_000L) {
-                lastSampleSavedMillis = now
-                scope.launch(Dispatchers.IO) {
-                    dao.insertBatterySample(
-                        BatterySampleEntity(
-                            timestampEpochMillis = now,
-                            levelPercent = battery.levelPercent,
-                            temperatureCelsius = temp,
-                            isCharging = battery.isCharging
-                        )
-                    )
-                    dao.pruneOldBatterySamples(now - 24L * 3600_000L)
-                }
-            }
-        }
+        val thermal = buildThermalMetrics(powerManager, level)
+        val (availRam, totalRam) = readMemoryMetrics()
+        val storage = _storageState.value
+        val appsState = _appsState.value
+        val unusedAppsCount = appsState.apps.count { it.isUnused30Days }
+        val activeBgCount = appsState.apps.count { it.foregroundTimeMillis > 15 * 60_000L }
 
         val score = HealthScoreCalculator.calculateScore(
             SystemHealthInputs(
@@ -210,15 +386,14 @@ class SystemSensorsRepository @Inject constructor(
                 thermalLevel = thermal.level,
                 batteryTempCelsius = battery.temperatureCelsius,
                 isBatteryHealthy = battery.isHealthy,
-                unusedAppsOver30Days = unusedApps.size,
+                unusedAppsOver30Days = unusedAppsCount,
                 availableMemoryBytes = availRam,
                 totalMemoryBytes = totalRam
             )
         )
 
-        val tempList = synchronized(tempWindow) { tempWindow.toList() }
-
         RealSystemSnapshot(
+            isLoading = false,
             healthScore = score,
             healthLabel = HealthScoreCalculator.statusLabelPt(score),
             battery = battery,
@@ -226,29 +401,83 @@ class SystemSensorsRepository @Inject constructor(
             storage = storage,
             availableRamBytes = availRam,
             totalRamBytes = totalRam,
-            hasUsageStatsPermission = usageGranted,
-            installedApps = apps,
-            unusedAppsCount = unusedApps.size,
-            highBackgroundAppsCount = activeBgApps.size,
-            tempHistory60s = tempList,
+            hasUsageStatsPermission = appsState.hasUsagePermission,
+            installedApps = appsState.apps,
+            unusedAppsCount = unusedAppsCount,
+            highBackgroundAppsCount = activeBgCount,
+            tempHistory60s = _tempHistoryState.value,
             lastUpdatedMillis = System.currentTimeMillis()
         )
     }
 
-    private fun readBatteryMetrics(): LiveBatteryMetrics {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+    private fun recordCurrentBatteryTempSample() {
+        val intent = ContextCompat.registerReceiver(
+            context,
+            null,
+            IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        val rawTempDeci = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+        if (rawTempDeci <= 0) return
+        val temp = rawTempDeci / 10f
 
+        synchronized(tempWindow) {
+            if (tempWindow.size >= 30) {
+                tempWindow.removeFirst()
+            }
+            tempWindow.addLast(temp)
+            _tempHistoryState.value = tempWindow.toList().toImmutableList()
+        }
+
+        val now = System.currentTimeMillis()
+        if (now - lastSampleSavedMillis >= 60_000L) {
+            lastSampleSavedMillis = now
+            val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
+            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100)?.coerceAtLeast(1) ?: 100
+            val pct = ((level * 100f) / scale).toInt().coerceIn(0, 100)
+            val status = intent?.getIntExtra(
+                BatteryManager.EXTRA_STATUS,
+                BatteryManager.BATTERY_STATUS_UNKNOWN
+            ) ?: BatteryManager.BATTERY_STATUS_UNKNOWN
+            val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+
+            scope.launch(Dispatchers.IO) {
+                dao.insertBatterySample(
+                    BatterySampleEntity(
+                        timestampEpochMillis = now,
+                        levelPercent = pct,
+                        temperatureCelsius = temp,
+                        isCharging = isCharging
+                    )
+                )
+                dao.pruneOldBatterySamples(now - 24L * 3600_000L)
+            }
+        }
+    }
+
+    private fun readBatteryMetricsOnce(): LiveBatteryMetrics {
+        val intent = ContextCompat.registerReceiver(
+            context,
+            null,
+            IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        return parseBatteryIntent(intent)
+    }
+
+    private fun parseBatteryIntent(intent: Intent?): LiveBatteryMetrics {
+        val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-        val levelPercent = if (level >= 0 && scale > 0) {
-            ((level * 100f) / scale.toFloat()).toInt().coerceIn(0, 100)
+        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100)?.coerceAtLeast(1) ?: 100
+        val levelPercent = if (level >= 0) {
+            ((level * 100f) / scale).toInt().coerceIn(0, 100)
         } else {
             batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
         }
 
-        val rawTempTenths = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
-        val tempCelsius = if (rawTempTenths > 0) rawTempTenths / 10f else null
+        val rawTempDeci = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+        val tempCelsius = if (rawTempDeci > 0) rawTempDeci / 10f else null
 
         val healthInt = intent?.getIntExtra(
             BatteryManager.EXTRA_HEALTH,
@@ -272,7 +501,6 @@ class SystemSensorsRepository @Inject constructor(
         val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
             status == BatteryManager.BATTERY_STATUS_FULL
 
-        // Ciclos de bateria (API 34+ EXTRA_CYCLE_COUNT ou sysfs se acessível; caso contrário explica porquê)
         val rawCycles = if (Build.VERSION.SDK_INT >= 34) {
             intent?.getIntExtra("android.os.extra.CYCLE_COUNT", -1) ?: -1
         } else {
@@ -286,7 +514,6 @@ class SystemSensorsRepository @Inject constructor(
             "N/D" to "Não reportado pelo fabricante"
         }
 
-        // Corrente e estimativa real
         val currentNowUa = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
         val chargeCounterUah = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
         val currentMa = if (currentNowUa != Int.MIN_VALUE && currentNowUa != 0) {
@@ -367,14 +594,10 @@ class SystemSensorsRepository @Inject constructor(
         }
     }
 
-    private fun readThermalMetrics(): LiveThermalMetrics {
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        val level = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ThermalStatusMapper.fromPowerManagerStatus(powerManager.currentThermalStatus)
-        } else {
-            ThermalLevelPt.INDISPONIVEL
-        }
-
+    private fun buildThermalMetrics(
+        powerManager: PowerManager,
+        level: ThermalLevelPt
+    ): LiveThermalMetrics {
         val headroom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 val raw = powerManager.getThermalHeadroom(10)
@@ -399,15 +622,39 @@ class SystemSensorsRepository @Inject constructor(
         )
     }
 
-    private fun readStorageMetrics(): LiveStorageMetrics {
+    /**
+     * Usa StorageStatsManager.queryExternalStatsForUser(UUID_DEFAULT, myUserHandle()) numa única chamada
+     * em vez de percorrer o MediaStore 3 vezes.
+     */
+    private fun readStorageMetrics(hasUsagePermission: Boolean): LiveStorageMetrics {
         val statFs = StatFs(Environment.getDataDirectory().path)
         val total = statFs.totalBytes
         val free = statFs.availableBytes
         val used = (total - free).coerceAtLeast(0L)
 
-        val photos = sumMediaStoreColumn(MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
-        val videos = sumMediaStoreColumn(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-        val audio = sumMediaStoreColumn(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+        var photos = 0L
+        var videos = 0L
+        var audio = 0L
+        var externalAvailable = false
+
+        if (hasUsagePermission) {
+            val storageStatsManager = context.getSystemService(Context.STORAGE_STATS_SERVICE) as? StorageStatsManager
+            if (storageStatsManager != null) {
+                try {
+                    val extStats = storageStatsManager.queryExternalStatsForUser(
+                        StorageManager.UUID_DEFAULT,
+                        Process.myUserHandle()
+                    )
+                    photos = extStats.imageBytes.coerceAtLeast(0L)
+                    videos = extStats.videoBytes.coerceAtLeast(0L)
+                    audio = extStats.audioBytes.coerceAtLeast(0L)
+                    externalAvailable = true
+                } catch (_: Exception) {
+                    externalAvailable = false
+                }
+            }
+        }
+
         val appsAndSystem = (used - photos - videos - audio).coerceAtLeast(0L)
 
         return LiveStorageMetrics(
@@ -417,24 +664,9 @@ class SystemSensorsRepository @Inject constructor(
             appsAndSystemBytes = appsAndSystem,
             photosBytes = photos,
             videosBytes = videos,
-            otherMediaBytes = audio
+            otherMediaBytes = audio,
+            externalStatsAvailable = externalAvailable
         )
-    }
-
-    private fun sumMediaStoreColumn(uri: android.net.Uri): Long {
-        var sum = 0L
-        try {
-            val projection = arrayOf(MediaStore.MediaColumns.SIZE)
-            context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-                while (cursor.moveToNext()) {
-                    sum += cursor.getLong(sizeCol).coerceAtLeast(0L)
-                }
-            }
-        } catch (_: Exception) {
-            // Sem permissão de media ainda concedida; devolve 0L honestamente
-        }
-        return sum
     }
 
     private fun readMemoryMetrics(): Pair<Long, Long> {
@@ -444,15 +676,15 @@ class SystemSensorsRepository @Inject constructor(
         return info.availMem to info.totalMem
     }
 
-    private fun readInstalledAppsUsage(hasUsagePermission: Boolean): List<InstalledAppUsageInfo> {
+    private fun readInstalledAppsUsage(hasUsagePermission: Boolean): ImmutableList<InstalledAppUsageInfo> {
         val pm = context.packageManager
         val now = System.currentTimeMillis()
         val thirtyDaysAgo = now - (30L * 24L * 3600_000L)
-        val oneYearAgo = now - (365L * 24L * 3600_000L)
+        val ninetyDaysAgo = now - (90L * 24L * 3600_000L)
 
         val usageMap = if (hasUsagePermission) {
             val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-            usm.queryAndAggregateUsageStats(oneYearAgo, now)
+            usm.queryAndAggregateUsageStats(ninetyDaysAgo, now)
         } else {
             emptyMap()
         }
@@ -474,7 +706,7 @@ class SystemSensorsRepository @Inject constructor(
         )
 
         val apps = try {
-            pm.getInstalledApplications(PackageManager.GET_META_DATA)
+            pm.getInstalledApplications(0)
         } catch (_: Exception) {
             emptyList()
         }
@@ -499,6 +731,7 @@ class SystemSensorsRepository @Inject constructor(
                 else -> label.uppercase()
             }
 
+            @Suppress("DEPRECATION")
             val isGame = (appInfo.category == ApplicationInfo.CATEGORY_GAME) ||
                 ((appInfo.flags and ApplicationInfo.FLAG_IS_GAME) != 0) ||
                 (appInfo.packageName in knownGamePackages)
@@ -525,41 +758,44 @@ class SystemSensorsRepository @Inject constructor(
                 referenceTime < thirtyDaysAgo || (isStopped && daysSinceUse >= 14)
             }
 
-            val apkAndSplitsBytes = buildList {
-                appInfo.sourceDir?.let { add(File(it)) }
-                appInfo.splitSourceDirs?.forEach { add(File(it)) }
-            }.sumOf { file -> if (file.exists()) file.length() else 0L }
+            // Chave em cache: packageName + lastUpdateTime + permissão UsageStats
+            val cacheKey = "${appInfo.packageName}:${lastUpdate}:${hasUsagePermission}"
+            val sizeBytes = appSizeCache.getOrPut(cacheKey) {
+                val apkAndSplitsBytes = buildList {
+                    appInfo.sourceDir?.let { add(File(it)) }
+                    appInfo.splitSourceDirs?.forEach { add(File(it)) }
+                }.sumOf { file -> if (file.exists()) file.length() else 0L }
 
-            val nativeLibsBytes = appInfo.nativeLibraryDir?.let { dirPath ->
-                val dir = File(dirPath)
-                if (dir.exists() && dir.isDirectory) {
-                    dir.listFiles()?.sumOf { it.length() } ?: 0L
+                val nativeLibsBytes = appInfo.nativeLibraryDir?.let { dirPath ->
+                    val dir = File(dirPath)
+                    if (dir.exists() && dir.isDirectory) {
+                        dir.listFiles()?.sumOf { it.length() } ?: 0L
+                    } else {
+                        0L
+                    }
+                } ?: 0L
+
+                val fallbackAppBytes = apkAndSplitsBytes + nativeLibsBytes
+
+                if (hasUsagePermission && storageStatsManager != null) {
+                    try {
+                        val st = storageStatsManager.queryStatsForPackage(
+                            StorageManager.UUID_DEFAULT,
+                            appInfo.packageName,
+                            userHandle
+                        )
+                        (st.appBytes + st.dataBytes + st.cacheBytes).coerceAtLeast(fallbackAppBytes)
+                    } catch (_: Exception) {
+                        fallbackAppBytes
+                    }
                 } else {
-                    0L
-                }
-            } ?: 0L
-
-            val fallbackAppBytes = apkAndSplitsBytes + nativeLibsBytes
-
-            val sizeBytes = if (hasUsagePermission && storageStatsManager != null) {
-                try {
-                    val st = storageStatsManager.queryStatsForPackage(
-                        StorageManager.UUID_DEFAULT,
-                        appInfo.packageName,
-                        userHandle
-                    )
-                    (st.appBytes + st.dataBytes + st.cacheBytes).coerceAtLeast(fallbackAppBytes)
-                } catch (_: Exception) {
                     fallbackAppBytes
                 }
-            } else {
-                fallbackAppBytes
             }
 
             val effectiveFgMillis = if (hasUsagePermission) {
                 fgTime
             } else if (!isStopped) {
-                // Sem UsageStats concedida, indica que a app está ativa (não parada) no sistema
                 30 * 60_000L
             } else {
                 0L
@@ -579,20 +815,49 @@ class SystemSensorsRepository @Inject constructor(
         }.sortedWith(
             compareByDescending<InstalledAppUsageInfo> { it.totalSizeBytes }
                 .thenBy { it.appName }
-        )
+        ).toImmutableList()
     }
 
     /**
-     * Para processos em fundo permitidos pelo Android (apenas no flavor 'full' com KILL_BACKGROUND_PROCESSES)
-     * e grava a ação real no Histórico Room.
+     * Para processos em fundo permitidos pelo Android (apenas no flavor 'full' com KILL_BACKGROUND_PROCESSES):
+     * - Não volta a ler o snapshot completo (usa a lista atual em memória);
+     * - Usa UsageStatsManager.queryEvents para excluir a app em primeiro plano e todas as usadas nos últimos 60 s;
+     * - Não limita às 12 maiores;
+     * - Regista no Histórico exatamente o que foi feito.
      */
     suspend fun stopPermittedBackgroundApps(recordInHistory: Boolean = true): Int = withContext(Dispatchers.IO) {
         if (!BuildConfig.IS_FULL_FLAVOR) return@withContext 0
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val snapshot = readCurrentSnapshot()
-        val candidates = snapshot.installedApps
-            .filter { it.packageName != context.packageName }
-            .take(12)
+
+        val currentApps = _appsState.value.apps.ifEmpty {
+            readInstalledAppsUsage(hasUsageStatsPermission())
+        }
+
+        val now = System.currentTimeMillis()
+        val recentActivePackages = mutableSetOf<String>()
+        recentActivePackages.add(context.packageName)
+
+        if (hasUsageStatsPermission()) {
+            try {
+                val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                val events = usm.queryEvents(now - 60_000L, now)
+                val event = UsageEvents.Event()
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event)
+                    if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
+                        event.eventType == UsageEvents.Event.ACTIVITY_PAUSED ||
+                        event.eventType == UsageEvents.Event.USER_INTERACTION
+                    ) {
+                        event.packageName?.let { recentActivePackages.add(it) }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        val candidates = currentApps.filter { app ->
+            app.packageName !in recentActivePackages
+        }
 
         var stoppedCount = 0
         for (app in candidates) {
@@ -600,17 +865,21 @@ class SystemSensorsRepository @Inject constructor(
                 am.killBackgroundProcesses(app.packageName)
                 stoppedCount++
             } catch (_: Exception) {
-                // Ignora se bloqueado pelo sistema
             }
         }
 
         if (recordInHistory && stoppedCount > 0) {
+            val detailMsg = if (hasUsageStatsPermission()) {
+                "killBackgroundProcesses solicitado ao Android para $stoppedCount app(s) em fundo (excluindo a app em primeiro plano e as ${recentActivePackages.size - 1} usada(s) nos últimos 60 s)."
+            } else {
+                "killBackgroundProcesses solicitado ao Android para $stoppedCount app(s) instaladas que já se encontravam em segundo plano."
+            }
             dao.insertHistory(
                 HistoryEntity(
                     actionType = "BACKGROUND_STOP",
-                    title = "Apps em fundo paradas ($stoppedCount apps)",
-                    details = "killBackgroundProcesses executado nas apps em segundo plano permitidas pelo Android.",
-                    timestampEpochMillis = System.currentTimeMillis(),
+                    title = "Processos em fundo terminados ($stoppedCount apps)",
+                    details = detailMsg,
+                    timestampEpochMillis = now,
                     bytesFreed = 0L,
                     canRestore = false
                 )

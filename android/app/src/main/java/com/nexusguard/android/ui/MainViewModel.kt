@@ -27,6 +27,7 @@ import com.nexusguard.android.util.PdfReportExporter
 import com.nexusguard.android.worker.SystemMonitorWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -103,7 +104,7 @@ class MainViewModel @Inject constructor(
         CleanScanReport(
             hasMediaPermission = cleanerRepository.hasMediaReadPermission(),
             hasManageStoragePermission = cleanerRepository.hasManageExternalStoragePermission(),
-            categories = emptyList(),
+            categories = persistentListOf(),
             totalCleanableBytes = 0L,
             scannedFilesCount = 0
         )
@@ -148,6 +149,9 @@ class MainViewModel @Inject constructor(
 
     fun onAppResumed() {
         appUpdaterRepository.onAppResumed()
+        viewModelScope.launch {
+            sensorsRepository.refreshSlowMetrics(force = false)
+        }
     }
 
     fun openUpdateInBrowser() {
@@ -318,7 +322,7 @@ class MainViewModel @Inject constructor(
                 trashedFiles = trashedFiles
             )
             refreshCleanScan()
-            sensorsRepository.readCurrentSnapshot()
+            sensorsRepository.refreshSlowMetrics(force = true)
         }
     }
 
@@ -334,7 +338,7 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             cleanerRepository.markHistoryEntryRestored(entryId)
             refreshCleanScan()
-            sensorsRepository.readCurrentSnapshot()
+            sensorsRepository.refreshSlowMetrics(force = true)
         }
     }
 

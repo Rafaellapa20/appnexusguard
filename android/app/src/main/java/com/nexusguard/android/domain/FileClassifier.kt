@@ -1,7 +1,9 @@
 package com.nexusguard.android.domain
 
+import androidx.compose.runtime.Immutable
 import java.security.MessageDigest
 
+@Immutable
 data class ScannedFileCandidate(
     val id: Long,
     val contentUri: String,

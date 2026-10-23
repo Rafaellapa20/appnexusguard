@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
@@ -24,6 +25,7 @@ import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
+@Immutable
 data class BoostSessionSummary(
     val gameName: String,
     val durationFormatted: String,
@@ -33,6 +35,7 @@ data class BoostSessionSummary(
     val appsStopped: Int
 )
 
+@Immutable
 data class BoostSessionState(
     val isActive: Boolean = false,
     val gamePackage: String = "",

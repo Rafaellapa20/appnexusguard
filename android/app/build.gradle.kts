@@ -113,6 +113,9 @@ dependencies {
     // WorkManager
     implementation(libs.androidx.work.runtime.ktx)
 
+    // Immutable Collections for Compose stability
+    implementation(libs.kotlinx.collections.immutable)
+
     // Unit tests
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import com.nexusguard.android.BuildConfig
 import com.nexusguard.android.data.local.HistoryEntity
@@ -17,6 +18,9 @@ import com.nexusguard.android.domain.FileClassifier
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.ScannedFileCandidate
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -36,20 +40,24 @@ enum class CleanCategoryType(
     EMPTY_FOLDERS("Pastas vazias", "0 pastas vazias")
 }
 
+@Immutable
 data class CleanCategoryGroup(
     val type: CleanCategoryType,
     val subtitlePt: String,
-    val files: List<ScannedFileCandidate>,
-    val emptyFoldersPaths: List<String> = emptyList(),
+    val files: ImmutableList<ScannedFileCandidate>,
+    val emptyFoldersPaths: ImmutableList<String> = persistentListOf(),
     val totalSizeBytes: Long
 )
 
+@Immutable
 data class CleanScanReport(
     val hasMediaPermission: Boolean,
     val hasManageStoragePermission: Boolean,
-    val categories: List<CleanCategoryGroup>,
+    val categories: ImmutableList<CleanCategoryGroup> = persistentListOf(),
     val totalCleanableBytes: Long,
-    val scannedFilesCount: Int
+    val scannedFilesCount: Int,
+    val timestampMillis: Long = 0L,
+    val freeStorageAtScanBytes: Long = 0L
 )
 
 @Singleton
@@ -120,42 +128,42 @@ class CleanerRepository @Inject constructor(
         }
         val emptyFolders = scanEmptyFolders()
 
-        val groups = listOf(
+        val groups = persistentListOf(
             CleanCategoryGroup(
                 type = CleanCategoryType.INSTALLED_APKS,
                 subtitlePt = "Transferências · ${installedApks.size} ficheiro(s)",
-                files = installedApks,
+                files = installedApks.toImmutableList(),
                 totalSizeBytes = installedApks.sumOf { it.sizeBytes }
             ),
             CleanCategoryGroup(
                 type = CleanCategoryType.LARGE_FILES,
                 subtitlePt = "> 100 MB · ${largeFiles.size} ficheiro(s)",
-                files = largeFiles,
+                files = largeFiles.toImmutableList(),
                 totalSizeBytes = largeFiles.sumOf { it.sizeBytes }
             ),
             CleanCategoryGroup(
                 type = CleanCategoryType.OLD_DOWNLOADS,
                 subtitlePt = "> 90 dias · ${oldDownloads.size} ficheiro(s)",
-                files = oldDownloads,
+                files = oldDownloads.toImmutableList(),
                 totalSizeBytes = oldDownloads.sumOf { it.sizeBytes }
             ),
             CleanCategoryGroup(
                 type = CleanCategoryType.DUPLICATES,
                 subtitlePt = "${duplicates.size} cópia(s) idêntica(s) (SHA-256)",
-                files = duplicates,
+                files = duplicates.toImmutableList(),
                 totalSizeBytes = duplicates.sumOf { it.sizeBytes }
             ),
             CleanCategoryGroup(
                 type = CleanCategoryType.OLD_SCREENSHOTS,
                 subtitlePt = "> 6 meses · ${oldScreenshots.size} captura(s)",
-                files = oldScreenshots,
+                files = oldScreenshots.toImmutableList(),
                 totalSizeBytes = oldScreenshots.sumOf { it.sizeBytes }
             ),
             CleanCategoryGroup(
                 type = CleanCategoryType.EMPTY_FOLDERS,
                 subtitlePt = "${emptyFolders.size} pasta(s) vazia(s)",
-                files = emptyList(),
-                emptyFoldersPaths = emptyFolders,
+                files = persistentListOf(),
+                emptyFoldersPaths = emptyFolders.toImmutableList(),
                 totalSizeBytes = 0L
             )
         )
@@ -170,7 +178,8 @@ class CleanerRepository @Inject constructor(
             hasManageStoragePermission = manageGranted,
             categories = groups,
             totalCleanableBytes = uniqueBytes,
-            scannedFilesCount = allCandidates.size
+            scannedFilesCount = allCandidates.size,
+            timestampMillis = System.currentTimeMillis()
         )
     }
 
