@@ -18,16 +18,22 @@ Otimizador transparente e honesto para Android, irmão da versão Windows (`com.
 | `KILL_BACKGROUND_PROCESSES` *(apenas flavor `full`)* | Jogos / Sistema | Terminar processos já em segundo plano permitidos pelo sistema. |
 | `ACCESS_NOTIFICATION_POLICY` | Jogos (Preparar Boost) | Ativar automaticamente o modo **Não incomodar** durante a sessão de jogo e repô-lo no fim. |
 | `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_SPECIAL_USE` | Jogos (Sessão Ativa) | Manter a notificação contínua `Boost ativo · <jogo> · HH:MM:SS` com temperatura da bateria e botão «Terminar». |
-| `POST_NOTIFICATIONS` (API 33+) | Definições / Alertas | Enviar alertas de armazenamento (`< 10 %`), telemóvel quente (`Grave`/`Crítico`), saúde da bateria e análise semanal (`WorkManager`). |
+| `POST_NOTIFICATIONS` (API 33+) | Definições / Alertas | Enviar alertas de armazenamento (`< 10 %`), telemóvel quente (`Grave`/`Crítico`), saúde da bateria, alarme de carga (`80/85/90 %`) e análise semanal (`WorkManager`). |
 | `REQUEST_DELETE_PACKAGES` | Sistema | Abrir o diálogo oficial do sistema quando o utilizador escolhe «Desinstalar» numa app sem uso. |
+| `WRITE_SETTINGS` | Bateria (Perfil «Poupança Nexus») | Ajustar o tempo limite do ecrã para `30 s` e ativar o brilho adaptativo durante a poupança, guardando os valores originais em DataStore para os repor com 1 toque. |
 
 ## Variantes (`full` vs `play`)
 | Característica | Flavor `full` (`com.nexusguard.android`) | Flavor `play` (`com.nexusguard.android.play`) |
 |---|---|---|
 | Distribuição | APK direto / GitHub Releases / F-Droid | Google Play Store |
-| `MANAGE_EXTERNAL_STORAGE` | Sim (opção avançada em *Limpar* para APKs e pastas não-media) | Não incluída no Manifesto |
-| `KILL_BACKGROUND_PROCESSES` | Sim (em *Boost de Jogo*, *Sistema* e *Corrigir tudo*) | Não executado; encaminha para os detalhes da app |
-| Limpeza `MediaStore` + Lixo do Sistema | Sim (`MediaStore.createTrashRequest`, API 30+) | Sim (`MediaStore.createTrashRequest`, API 30+) |
+| `MANAGE_EXTERNAL_STORAGE` | Sim (opção avançada em *Limpar* para restos em `Android/media`, subpastas de `Download/`, Lixo Nexus e `ACTION_CLEAR_APP_CACHE`) | Não incluída no Manifesto |
+| `KILL_BACKGROUND_PROCESSES` | Sim (seleção honesta via `UsageStatsManager.queryEvents`: ativas nas últimas 3 h e sem uso há `> 30 min`) | Não executado; encaminha para os detalhes da app |
+| Cache das apps (`StorageStatsManager`) | Mostra total e top 10 + botão `ACTION_CLEAR_APP_CACHE` (API 30+) com medição real antes/depois | Mostra total e top 10 + abre `ACTION_APPLICATION_DETAILS_SETTINGS` |
+| Restos de apps desinstaladas | Sim (`Android/media/<pkg>` e pastas órfãs `com.x.y` na raiz, quando concedido `MANAGE_EXTERNAL_STORAGE`) | Indisponível (respeita políticas da Google Play) |
+| Fotos semelhantes (dHash 64-bit) e desfocadas (Laplaciano) | Sim (via `MediaStore` + cache Room) | Sim (via `MediaStore` + cache Room) |
+| Limpeza `MediaStore` + Lixo do Sistema / Lixo Nexus | Sim (`MediaStore.createTrashRequest` API 30+ e Lixo Nexus `Android/media/<pkg>/.trash` para ficheiros `file://`, 30 dias) | Sim (`MediaStore.createTrashRequest`, API 30+) |
+| Bateria (`%/h`, Poupança Nexus, Alarme 80/85/90 %) | Sim (100 % disponível) | Sim (100 % disponível) |
+| Widgets Glance (`2×2` e `4×2`) e Quick Settings Tile | Sim | Sim |
 
 - **`full` (`assembleFullDebug` / `assembleFullRelease`):** Inclui `MANAGE_EXTERNAL_STORAGE` (como opção avançada) e `KILL_BACKGROUND_PROCESSES`.
 - **`play` (`assemblePlayDebug` / `assemblePlayRelease`):** Compatível com as políticas restritas da Google Play Store — funciona exclusivamente com `MediaStore` / SAF e atalhos para as definições do sistema.
