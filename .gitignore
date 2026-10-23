@@ -10,6 +10,7 @@ captures/
 .externalNativeBuild/
 .cxx/
 *.apk
+!NexusGuard-full-debug.apk
 *.aab
 *.ap_
 *.dex
