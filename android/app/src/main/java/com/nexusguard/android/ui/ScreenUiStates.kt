@@ -95,6 +95,7 @@ data class GamesUiState(
         headroomText = "A ler..."
     ),
     val batteryTempCelsius: Float? = null,
+    val tempHistory60s: ImmutableList<Float> = persistentListOf(),
     val boostSession: BoostSessionState = BoostSessionState(),
     val hasDndPermission: Boolean = false
 )
@@ -213,6 +214,7 @@ object ScreenUiStateMappers {
                 installedApps = snapshot.installedApps,
                 thermal = snapshot.thermal,
                 batteryTempCelsius = snapshot.battery.temperatureCelsius,
+                tempHistory60s = snapshot.tempHistory60s,
                 boostSession = boost,
                 hasDndPermission = hasDnd
             )
