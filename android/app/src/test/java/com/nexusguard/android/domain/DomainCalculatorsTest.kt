@@ -610,4 +610,16 @@ class DomainCalculatorsTest {
         )
         assertEquals(5, alerts.size)
     }
+
+    @Test
+    fun `entitlements repository unlocks all 9 future premium candidate features`() {
+        val entitlements: EntitlementsRepository = AllUnlockedEntitlements()
+        assertEquals(9, PremiumFeature.entries.size)
+        PremiumFeature.entries.forEach { feature ->
+            assertTrue(
+                "A funcionalidade ${feature.name} deve estar desbloqueada em AllUnlockedEntitlements",
+                entitlements.isPremiumFeatureEnabled(feature)
+            )
+        }
+    }
 }

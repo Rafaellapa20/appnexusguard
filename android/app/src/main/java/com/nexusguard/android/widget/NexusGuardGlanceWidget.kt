@@ -42,7 +42,9 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.nexusguard.android.MainActivity
+import com.nexusguard.android.domain.AllUnlockedEntitlements
 import com.nexusguard.android.domain.NexusFormatters
+import com.nexusguard.android.domain.PremiumFeature
 import kotlin.math.abs
 
 class NexusGuardWidgetReceiver2x2 : GlanceAppWidgetReceiver() {
@@ -50,6 +52,9 @@ class NexusGuardWidgetReceiver2x2 : GlanceAppWidgetReceiver() {
 }
 
 class NexusGuardWidgetReceiver4x2 : GlanceAppWidgetReceiver() {
+    private val entitlements = AllUnlockedEntitlements()
+    val isWidget4x2Enabled: Boolean
+        get() = entitlements.isPremiumFeatureEnabled(PremiumFeature.WIDGET_4X2)
     override val glanceAppWidget: GlanceAppWidget = NexusGuardGlanceWidget()
 }
 

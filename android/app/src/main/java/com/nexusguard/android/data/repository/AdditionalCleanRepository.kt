@@ -16,11 +16,13 @@ import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.domain.BrowserPrivacyShortcut
 import com.nexusguard.android.domain.DownloadFileItem
+import com.nexusguard.android.domain.EntitlementsRepository
 import com.nexusguard.android.domain.LargeVideoItem
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.PhotoOptimizeQuality
 import com.nexusguard.android.domain.PhotoOptimizerCalculator
 import com.nexusguard.android.domain.PhotoOptimizerCandidate
+import com.nexusguard.android.domain.PremiumFeature
 import com.nexusguard.android.flavor.CallLogCleanerDelegate
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -33,8 +35,11 @@ import javax.inject.Singleton
 @Singleton
 class AdditionalCleanRepository @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val dao: NexusGuardDao
+    private val dao: NexusGuardDao,
+    private val entitlementsRepository: EntitlementsRepository
 ) {
+    val isPhotoOptimizerEnabled: Boolean
+        get() = entitlementsRepository.isPremiumFeatureEnabled(PremiumFeature.PHOTO_OPTIMIZER)
 
     /**
      * Verifica se há conteúdo na área de transferência (apenas com a app em primeiro plano).

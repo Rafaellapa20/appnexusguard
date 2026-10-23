@@ -23,10 +23,12 @@ import com.nexusguard.android.data.repository.RealSystemSnapshot
 import com.nexusguard.android.data.repository.SystemSensorsRepository
 import com.nexusguard.android.domain.AppImpactItem
 import com.nexusguard.android.domain.AppImpactPeriod
+import com.nexusguard.android.domain.EntitlementsRepository
 import com.nexusguard.android.domain.MonthlyReportSummary
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.PhotoOptimizeQuality
 import com.nexusguard.android.domain.PhotoOptimizerCandidate
+import com.nexusguard.android.domain.PremiumFeature
 import com.nexusguard.android.domain.ScannedFileCandidate
 import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.service.BoostSessionState
@@ -62,8 +64,13 @@ class MainViewModel @Inject constructor(
     private val batteryProfileManager: BatteryProfileManager,
     private val boostManager: GameBoostManager,
     private val appUpdaterRepository: AppUpdaterRepository,
+    private val entitlementsRepository: EntitlementsRepository,
     private val dao: NexusGuardDao
 ) : ViewModel() {
+
+    fun isFeatureUnlocked(feature: PremiumFeature): Boolean {
+        return entitlementsRepository.isPremiumFeatureEnabled(feature)
+    }
 
     companion object {
         private const val CLEAN_CACHE_MAX_AGE_MS = 10 * 60_000L // 10 minutos
@@ -363,7 +370,15 @@ class MainViewModel @Inject constructor(
     }
 
     fun selectAppsImpactPeriod(period: AppImpactPeriod) {
-        refreshAppsImpact(period = period, saveStorageSnapshots = false)
+        val effectivePeriod = if (
+            period != AppImpactPeriod.HOURS_24 &&
+            !entitlementsRepository.isPremiumFeatureEnabled(PremiumFeature.APP_IMPACT_7D_30D)
+        ) {
+            AppImpactPeriod.HOURS_24
+        } else {
+            period
+        }
+        refreshAppsImpact(period = effectivePeriod, saveStorageSnapshots = false)
     }
 
     fun refreshAppsImpact(
@@ -698,12 +713,14 @@ class MainViewModel @Inject constructor(
     }
 
     fun setDarkTheme(enabled: Boolean) {
+        if (!entitlementsRepository.isPremiumFeatureEnabled(PremiumFeature.THEMES)) return
         viewModelScope.launch {
             preferencesRepository.setDarkThemeEnabled(enabled)
         }
     }
 
     fun setWeeklyScan(enabled: Boolean) {
+        if (!entitlementsRepository.isPremiumFeatureEnabled(PremiumFeature.SCHEDULED_CLEAN)) return
         viewModelScope.launch {
             preferencesRepository.setWeeklyScanEnabled(enabled)
             val prefs = preferencesState.value
@@ -748,6 +765,9 @@ class MainViewModel @Inject constructor(
     }
 
     fun buildMonthlyReportSummary(): MonthlyReportSummary {
+        if (!entitlementsRepository.isPremiumFeatureEnabled(PremiumFeature.MONTHLY_REPORT)) {
+            return MonthlyReportSummary()
+        }
         val now = System.currentTimeMillis()
         val cutoff30d = now - (30L * 24L * 3600L * 1000L)
         val entries30d = allHistory.value.filter { it.timestampEpochMillis >= cutoff30d }
@@ -822,6 +842,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun setAutoBatterySaver(enabled: Boolean, thresholdPercent: Int = 20) {
+        if (!entitlementsRepository.isPremiumFeatureEnabled(PremiumFeature.AUTO_BATTERY_SAVER)) return
         viewModelScope.launch {
             preferencesRepository.setAutoBatterySaver(enabled, thresholdPercent)
         }

@@ -29,9 +29,11 @@ import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.data.local.NexusTrashEntity
 import com.nexusguard.android.domain.AppCacheCandidate
+import com.nexusguard.android.domain.EntitlementsRepository
 import com.nexusguard.android.domain.FileClassifier
 import com.nexusguard.android.domain.MediaStoreSqlFilter
 import com.nexusguard.android.domain.NexusFormatters
+import com.nexusguard.android.domain.PremiumFeature
 import com.nexusguard.android.domain.ScannedFileCandidate
 import com.nexusguard.android.domain.SimilarPhotoGroup
 import com.nexusguard.android.worker.NexusTrashPurgeWorker
@@ -152,8 +154,11 @@ data class ScanProgress(
 @Singleton
 class CleanerRepository @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val dao: NexusGuardDao
+    private val dao: NexusGuardDao,
+    private val entitlementsRepository: EntitlementsRepository
 ) {
+    val isSimilarAndBlurryPhotosEnabled: Boolean
+        get() = entitlementsRepository.isPremiumFeatureEnabled(PremiumFeature.SIMILAR_AND_BLURRY_PHOTOS)
     companion object {
         private const val MEDIASTORE_PAGE_SIZE = 500
         private const val THIRTY_DAYS_MILLIS = 30L * 24L * 3600_000L

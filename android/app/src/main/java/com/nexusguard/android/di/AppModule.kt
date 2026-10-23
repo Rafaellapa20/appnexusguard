@@ -8,6 +8,8 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.room.Room
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.data.local.NexusGuardDatabase
+import com.nexusguard.android.domain.AllUnlockedEntitlements
+import com.nexusguard.android.domain.EntitlementsRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -51,5 +53,13 @@ object AppModule {
     @Singleton
     fun provideDao(database: NexusGuardDatabase): NexusGuardDao {
         return database.dao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideEntitlementsRepository(
+        impl: AllUnlockedEntitlements
+    ): EntitlementsRepository {
+        return impl
     }
 }
