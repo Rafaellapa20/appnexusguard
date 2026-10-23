@@ -43,11 +43,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.RestoreFromTrash
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,6 +65,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -90,6 +88,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -119,6 +120,7 @@ import com.nexusguard.android.ui.navigation.NexusTab
 import com.nexusguard.android.ui.onboarding.OnboardingScreen
 import com.nexusguard.android.ui.theme.JetBrainsMonoFamily
 import com.nexusguard.android.ui.theme.NexusButtonShape
+import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 import java.util.Locale
@@ -138,10 +140,24 @@ fun NexusGuardMainScreen(
     val boostSession by viewModel.boostSession.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.onAppResumed()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     if (updateState.showUpdateDialog) {
         AppUpdatePromptDialog(
             updateState = updateState,
             onDownloadAndInstall = viewModel::startAppUpdateDownload,
+            onDownloadViaSystemManager = viewModel::downloadUpdateViaSystemManager,
             onInstallReadyApk = viewModel::installDownloadedUpdate,
             onOpenBrowser = viewModel::openUpdateInBrowser,
             onDismiss = viewModel::dismissUpdateDialog
@@ -2553,7 +2569,7 @@ private fun RealHistoryScreen(
     ) {
         NexusPrimaryGradientButton(
             text = "Exportar Histórico em PDF",
-            leadingIcon = Icons.Outlined.PictureAsPdf,
+            leadingIcon = NexusIcons.PictureAsPdf,
             onClick = {
                 pdfExportLauncher.launch("NexusGuard-Historico.pdf")
             },
@@ -2620,7 +2636,7 @@ private fun RealHistoryScreen(
                             shape = NexusButtonShape
                         ) {
                             Icon(
-                                imageVector = Icons.Outlined.RestoreFromTrash,
+                                imageVector = NexusIcons.RestoreFromTrash,
                                 contentDescription = null,
                                 tint = colors.accent2,
                                 modifier = Modifier.size(16.dp)
@@ -2645,6 +2661,7 @@ private fun RealHistoryScreen(
 private fun AppUpdatePromptDialog(
     updateState: AppUpdateUiState,
     onDownloadAndInstall: () -> Unit,
+    onDownloadViaSystemManager: () -> Unit,
     onInstallReadyApk: () -> Unit,
     onOpenBrowser: () -> Unit,
     onDismiss: () -> Unit
@@ -2803,6 +2820,16 @@ private fun AppUpdatePromptDialog(
                         text = "Atualizar agora",
                         onClick = onDownloadAndInstall
                     )
+                    OutlinedButton(
+                        onClick = onDownloadViaSystemManager,
+                        shape = NexusButtonShape,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Transferir pelo Gestor do Android",
+                            color = colors.accent2
+                        )
+                    }
                 }
             }
         },

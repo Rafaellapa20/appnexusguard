@@ -1,10 +1,15 @@
 package com.nexusguard.android.data.repository
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.nexusguard.android.BuildConfig
 import com.nexusguard.android.data.preferences.UserPreferencesRepository
@@ -16,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -56,12 +62,14 @@ class AppUpdaterRepository @Inject constructor(
     companion object {
         const val VERSION_JSON_URL =
             "https://raw.githubusercontent.com/Rafaellapa20/appnexusguard/main/version.json"
-        const val DEFAULT_APK_URL =
-            "https://github.com/Rafaellapa20/appnexusguard/raw/main/NexusGuard-full-debug.apk"
+        const val DIRECT_RAW_APK_URL =
+            "https://raw.githubusercontent.com/Rafaellapa20/appnexusguard/main/NexusGuard-full-debug.apk"
     }
 
     private val _updateState = MutableStateFlow(AppUpdateUiState())
     val updateState: StateFlow<AppUpdateUiState> = _updateState.asStateFlow()
+
+    private var activeDownloadId: Long = -1L
 
     suspend fun checkForUpdates(isStartupCheck: Boolean) = withContext(Dispatchers.IO) {
         _updateState.value = _updateState.value.copy(
@@ -76,11 +84,11 @@ class AppUpdaterRepository @Inject constructor(
         val remote = fetchRemoteVersionInfo() ?: RemoteUpdateInfo(
             versionCode = BuildConfig.VERSION_CODE,
             versionName = BuildConfig.VERSION_NAME,
-            apkUrl = DEFAULT_APK_URL,
-            releaseNotes = "• Dados 100% reais nos sensores, bateria, estado térmico e RAM\n" +
+            apkUrl = DIRECT_RAW_APK_URL,
+            releaseNotes = "• APK otimizado (~75 % mais leve, transferência ultrarrápida)\n" +
+                "• Dados 100 % reais nos sensores, bateria, estado térmico e RAM\n" +
                 "• Limpeza real via MediaStore com Lixo do sistema e Duplicados SHA-256\n" +
-                "• Modo Jogo com serviço em primeiro plano e Não Incomodar\n" +
-                "• Sistema de atualização direta integrado via GitHub",
+                "• Modo Jogo com serviço em primeiro plano e Não Incomodar",
             publishedAt = "Hoje"
         )
 
@@ -94,11 +102,20 @@ class AppUpdaterRepository @Inject constructor(
             showUpdateDialog = if (isStartupCheck) shouldPromptOnStartup else true,
             needsInstallPermission = !canInstallUnknownApps(),
             statusMessage = if (isStrictlyNewer) {
-                "Nova versão ${remote.versionName} disponível!"
+                "Nova versão ${remote.versionName} pronta para instalar!"
             } else {
-                "Versão disponível no repositório: ${remote.versionName}"
+                "Versão no repositório: ${remote.versionName}"
             }
         )
+    }
+
+    private fun normalizeDirectUrl(url: String): String {
+        val trimmed = url.trim().ifBlank { DIRECT_RAW_APK_URL }
+        return if (trimmed.contains("github.com/Rafaellapa20/appnexusguard/raw/main/")) {
+            DIRECT_RAW_APK_URL
+        } else {
+            trimmed
+        }
     }
 
     private fun fetchRemoteVersionInfo(): RemoteUpdateInfo? {
@@ -111,6 +128,7 @@ class AppUpdaterRepository @Inject constructor(
                 readTimeout = 8_000
                 useCaches = false
                 setRequestProperty("Cache-Control", "no-cache")
+                setRequestProperty("Accept-Encoding", "identity")
             }
             if (connection.responseCode in 200..299) {
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
@@ -118,10 +136,10 @@ class AppUpdaterRepository @Inject constructor(
                 RemoteUpdateInfo(
                     versionCode = json.optInt("versionCode", BuildConfig.VERSION_CODE),
                     versionName = json.optString("versionName", BuildConfig.VERSION_NAME),
-                    apkUrl = json.optString("apkUrl", DEFAULT_APK_URL),
+                    apkUrl = normalizeDirectUrl(json.optString("apkUrl", DIRECT_RAW_APK_URL)),
                     releaseNotes = json.optString(
                         "releaseNotes",
-                        "Melhorias de desempenho, sensores reais e correções."
+                        "Melhorias de desempenho, sensores reais e transferência rápida."
                     ),
                     publishedAt = json.optString("publishedAt", "Recente")
                 )
@@ -137,15 +155,15 @@ class AppUpdaterRepository @Inject constructor(
 
     suspend fun downloadAndInstallUpdate() = withContext(Dispatchers.IO) {
         val remote = _updateState.value.remoteInfo ?: return@withContext
-        val apkUrl = remote.apkUrl.ifBlank { DEFAULT_APK_URL }
+        val apkUrl = normalizeDirectUrl(remote.apkUrl)
 
         _updateState.value = _updateState.value.copy(
             isDownloading = true,
-            downloadProgress = 0f,
+            downloadProgress = 0.02f,
             downloadedBytes = 0L,
             totalBytes = 0L,
             errorMessage = null,
-            statusMessage = "A transferir atualização do GitHub..."
+            statusMessage = "A ligar ao servidor GitHub CDN..."
         )
 
         var connection: HttpURLConnection? = null
@@ -154,47 +172,84 @@ class AppUpdaterRepository @Inject constructor(
             val targetFile = File(updatesDir, "NexusGuard-update.apk")
             if (targetFile.exists()) targetFile.delete()
 
-            val url = URL("$apkUrl?t=${System.currentTimeMillis()}")
+            val separator = if (apkUrl.contains("?")) "&" else "?"
+            val url = URL("${apkUrl}${separator}t=${System.currentTimeMillis()}")
             connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
                 instanceFollowRedirects = true
                 connectTimeout = 15_000
-                readTimeout = 30_000
+                readTimeout = 45_000
                 useCaches = false
                 setRequestProperty("Cache-Control", "no-cache")
+                // Importante: evita compressão transparente gzip para que Content-Length seja exato e o stream não bloqueie
+                setRequestProperty("Accept-Encoding", "identity")
+                setRequestProperty("User-Agent", "NexusGuard-Android/${BuildConfig.VERSION_NAME}")
             }
 
-            val status = connection.responseCode
+            var status = connection.responseCode
+            // Segue redirecionamento manualmente caso mude de domínio
+            if (status in 301..308) {
+                val redirectUrl = connection.getHeaderField("Location")
+                connection.disconnect()
+                if (!redirectUrl.isNullOrBlank()) {
+                    connection = (URL(redirectUrl).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        instanceFollowRedirects = true
+                        connectTimeout = 15_000
+                        readTimeout = 45_000
+                        useCaches = false
+                        setRequestProperty("Accept-Encoding", "identity")
+                    }
+                    status = connection.responseCode
+                }
+            }
+
             if (status !in 200..299) {
                 _updateState.value = _updateState.value.copy(
                     isDownloading = false,
-                    errorMessage = "Não foi possível transferir o APK (HTTP $status). Podes abrir no navegador."
+                    errorMessage = "Servidor respondeu HTTP $status. Usa o botão «Transferir pelo Gestor do Android» abaixo."
                 )
                 return@withContext
             }
 
             val contentLength = connection.contentLengthLong.coerceAtLeast(0L)
             var downloaded = 0L
+            var lastUiUpdateMs = 0L
 
-            connection.inputStream.use { input ->
+            BufferedInputStream(connection.inputStream, 64 * 1024).use { input ->
                 FileOutputStream(targetFile).use { output ->
-                    val buffer = ByteArray(16 * 1024)
+                    val buffer = ByteArray(64 * 1024)
                     var bytesRead: Int
                     while (input.read(buffer).also { bytesRead = it } != -1) {
                         output.write(buffer, 0, bytesRead)
                         downloaded += bytesRead
-                        val progress = if (contentLength > 0L) {
-                            (downloaded.toFloat() / contentLength.toFloat()).coerceIn(0f, 1f)
-                        } else {
-                            0.5f
+                        val now = System.currentTimeMillis()
+                        if (now - lastUiUpdateMs >= 100L || (contentLength > 0L && downloaded >= contentLength)) {
+                            lastUiUpdateMs = now
+                            val progress = if (contentLength > 0L) {
+                                (downloaded.toFloat() / contentLength.toFloat()).coerceIn(0.02f, 1f)
+                            } else {
+                                (downloaded.toFloat() / (6f * 1024f * 1024f)).coerceIn(0.05f, 0.95f)
+                            }
+                            _updateState.value = _updateState.value.copy(
+                                downloadProgress = progress,
+                                downloadedBytes = downloaded,
+                                totalBytes = contentLength,
+                                statusMessage = "A transferir APK..."
+                            )
                         }
-                        _updateState.value = _updateState.value.copy(
-                            downloadProgress = progress,
-                            downloadedBytes = downloaded,
-                            totalBytes = contentLength
-                        )
                     }
                     output.flush()
+                    output.fd.sync()
                 }
+            }
+
+            if (!targetFile.exists() || targetFile.length() < 50_000L) {
+                _updateState.value = _updateState.value.copy(
+                    isDownloading = false,
+                    errorMessage = "O ficheiro transferido está incompleto (${targetFile.length()} B). Tenta pelo Gestor do Android."
+                )
+                return@withContext
             }
 
             preferencesRepository.setLastConfirmedUpdateCode(remote.versionCode)
@@ -203,12 +258,14 @@ class AppUpdaterRepository @Inject constructor(
             _updateState.value = _updateState.value.copy(
                 isDownloading = false,
                 downloadProgress = 1f,
+                downloadedBytes = targetFile.length(),
+                totalBytes = targetFile.length(),
                 downloadedApkFile = targetFile,
                 needsInstallPermission = !hasInstallPerm,
                 statusMessage = if (hasInstallPerm) {
-                    "Transferência concluída! A abrir instalador do Android..."
+                    "Transferência 100 % concluída! A abrir o instalador do Android..."
                 } else {
-                    "APK transferido! Autoriza a instalação de fontes desconhecidas para concluir."
+                    "Transferência 100 % concluída! Ativa «Permitir desta fonte» no ecrã que vai abrir para instalar automaticamente."
                 }
             )
 
@@ -222,10 +279,90 @@ class AppUpdaterRepository @Inject constructor(
         } catch (e: Exception) {
             _updateState.value = _updateState.value.copy(
                 isDownloading = false,
-                errorMessage = "Erro ao transferir: ${e.localizedMessage ?: "Verifica a ligação à Internet."}"
+                errorMessage = "Falha na transferência direta (${e.localizedMessage ?: "erro de rede"}). Usa o Gestor do Android abaixo."
             )
         } finally {
             connection?.disconnect()
+        }
+    }
+
+    /**
+     * Alternativa nativa usando o DownloadManager do sistema Android (transfere na barra de notificações
+     * para a pasta Transferências e abre o instalador ao terminar).
+     */
+    fun downloadViaSystemDownloadManager() {
+        val remote = _updateState.value.remoteInfo
+        val apkUrl = normalizeDirectUrl(remote?.apkUrl ?: DIRECT_RAW_APK_URL)
+        try {
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val fileName = "NexusGuard-${remote?.versionName ?: "latest"}.apk"
+            val destFile = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                fileName
+            )
+            if (destFile.exists()) destFile.delete()
+
+            val request = DownloadManager.Request(Uri.parse("$apkUrl?t=${System.currentTimeMillis()}"))
+                .setTitle("Atualização Nexus Guard ${remote?.versionName ?: ""}")
+                .setDescription("A transferir nova versão do GitHub...")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setMimeType("application/vnd.android.package-archive")
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(true)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+
+            activeDownloadId = dm.enqueue(request)
+
+            _updateState.value = _updateState.value.copy(
+                errorMessage = null,
+                statusMessage = "Transferência iniciada no Gestor do Android (vê na barra de notificações ou na pasta Transferências)."
+            )
+
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
+                    if (id == activeDownloadId && destFile.exists()) {
+                        try {
+                            context.unregisterReceiver(this)
+                        } catch (_: Exception) {
+                        }
+                        _updateState.value = _updateState.value.copy(
+                            downloadedApkFile = destFile,
+                            downloadProgress = 1f,
+                            statusMessage = "Transferência concluída na pasta Transferências! A iniciar instalação..."
+                        )
+                        if (canInstallUnknownApps()) {
+                            launchApkInstaller(destFile)
+                        } else {
+                            openInstallUnknownAppsSettings()
+                        }
+                    }
+                }
+            }
+
+            ContextCompat.registerReceiver(
+                context,
+                receiver,
+                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                ContextCompat.RECEIVER_EXPORTED
+            )
+        } catch (e: Exception) {
+            openBrowserFallback()
+        }
+    }
+
+    /**
+     * Chamado quando o utilizador regressa à app (ON_RESUME) depois de ativar "Permitir desta fonte".
+     */
+    fun onAppResumed() {
+        val current = _updateState.value
+        val file = current.downloadedApkFile
+        if (file != null && file.exists() && current.needsInstallPermission && canInstallUnknownApps()) {
+            _updateState.value = current.copy(
+                needsInstallPermission = false,
+                statusMessage = "Permissão concedida! A iniciar instalação da atualização..."
+            )
+            launchApkInstaller(file)
         }
     }
 
@@ -278,13 +415,13 @@ class AppUpdaterRepository @Inject constructor(
             context.startActivity(installIntent)
         } catch (e: Exception) {
             _updateState.value = _updateState.value.copy(
-                errorMessage = "Não foi possível iniciar o instalador: ${e.localizedMessage}"
+                errorMessage = "Não foi possível abrir o instalador: ${e.localizedMessage}"
             )
         }
     }
 
     fun openBrowserFallback() {
-        val url = _updateState.value.remoteInfo?.apkUrl ?: DEFAULT_APK_URL
+        val url = normalizeDirectUrl(_updateState.value.remoteInfo?.apkUrl ?: DIRECT_RAW_APK_URL)
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

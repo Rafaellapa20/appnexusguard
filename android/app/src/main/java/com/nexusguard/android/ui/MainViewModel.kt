@@ -142,6 +142,14 @@ class MainViewModel @Inject constructor(
         appUpdaterRepository.installDownloadedApkIfReady()
     }
 
+    fun downloadUpdateViaSystemManager() {
+        appUpdaterRepository.downloadViaSystemDownloadManager()
+    }
+
+    fun onAppResumed() {
+        appUpdaterRepository.onAppResumed()
+    }
+
     fun openUpdateInBrowser() {
         appUpdaterRepository.openBrowserFallback()
     }

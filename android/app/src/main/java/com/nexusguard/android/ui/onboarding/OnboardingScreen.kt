@@ -21,11 +21,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,6 +39,7 @@ import com.nexusguard.android.ui.components.NexusBrandWordmark
 import com.nexusguard.android.ui.components.NexusCard
 import com.nexusguard.android.ui.components.NexusFlavorPill
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
+import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 
@@ -63,21 +61,21 @@ fun OnboardingScreen(
             number = "01",
             title = "Pré-visualização e confirmação sempre",
             description = "Nunca apaga fotos, documentos ou conversas sem pré-visualização obrigatória e a tua confirmação explícita.",
-            icon = Icons.Outlined.Visibility,
+            icon = NexusIcons.Visibility,
             accentColor = colors.accent2
         ),
         OnboardingPrinciple(
             number = "02",
             title = "Lixo do sistema como quarentena",
             description = "Tudo o que apagas vai para o Lixo do sistema (MediaStore.createTrashRequest, Android 11+), funcionando como quarentena que podes restaurar.",
-            icon = Icons.Outlined.DeleteSweep,
+            icon = Icons.Outlined.Delete,
             accentColor = colors.ok
         ),
         OnboardingPrinciple(
             number = "03",
             title = "Zero números falsos",
             description = "Nunca promete números inventados (FPS, «+40 % de velocidade» ou «RAM libertada» fictícia). Mostra apenas o que é medido de verdade pelo Android.",
-            icon = Icons.Outlined.Speed,
+            icon = NexusIcons.Speed,
             accentColor = colors.accent
         ),
         OnboardingPrinciple(
@@ -91,7 +89,7 @@ fun OnboardingScreen(
             number = "05",
             title = "Histórico completo e 100 % local",
             description = "Tudo o que altera fica registado no Histórico. Nada sai do teu telemóvel: sem analytics, sem anúncios e sem permissão de Internet.",
-            icon = Icons.Outlined.History,
+            icon = NexusIcons.History,
             accentColor = colors.ok
         )
     )

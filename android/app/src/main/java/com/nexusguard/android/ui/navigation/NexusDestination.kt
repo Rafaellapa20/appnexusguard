@@ -1,12 +1,11 @@
 package com.nexusguard.android.ui.navigation
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.BatteryChargingFull
-import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.nexusguard.android.ui.theme.NexusIcons
 
 enum class NexusTab(
     val route: String,
@@ -21,17 +20,17 @@ enum class NexusTab(
     CLEAN(
         route = "clean",
         label = "Limpar",
-        icon = Icons.Outlined.DeleteOutline
+        icon = Icons.Outlined.Delete
     ),
     GAMES(
         route = "games",
         label = "Jogos",
-        icon = Icons.Outlined.SportsEsports
+        icon = NexusIcons.SportsEsports
     ),
     BATTERY(
         route = "battery",
         label = "Bateria",
-        icon = Icons.Outlined.BatteryChargingFull
+        icon = NexusIcons.BatteryChargingFull
     ),
     SYSTEM(
         route = "system",
