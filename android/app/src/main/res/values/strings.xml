@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nexus Guard</string>
+    <string name="nav_home">Início</string>
+    <string name="nav_clean">Limpar</string>
+    <string name="nav_games">Jogos</string>
+    <string name="nav_system">Sistema</string>
+    <string name="nav_history">Histórico</string>
+    <string name="settings_title">Definições</string>
+</resources>

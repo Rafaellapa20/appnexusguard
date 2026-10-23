@@ -1,0 +1,25 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <!-- Ícone pequeno de notificação: só o velocímetro (arco + ponteiro), branco e transparente -->
+    <path
+        android:pathData="M18,70 A34,34 0 0,1 78,28"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="10"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <path
+        android:pathData="M50,62 L70,38"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <path
+        android:pathData="M50,52 A10,10 0 1,1 50,72 A10,10 0 1,1 50,52 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>
