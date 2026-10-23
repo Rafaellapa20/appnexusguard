@@ -562,4 +562,52 @@ class DomainCalculatorsTest {
         assertEquals(listOf(dl2, dl1), PhotoOptimizerCalculator.sortDownloads(listOf(dl1, dl2), DownloadsSortOrder.BY_SIZE_DESC))
         assertEquals(listOf(dl2, dl1), PhotoOptimizerCalculator.sortDownloads(listOf(dl1, dl2), DownloadsSortOrder.BY_AGE_OLDEST))
     }
+
+    @Test
+    fun `scheduled clean planner auto-cleans only authorized safe items and caps smart alerts to 1 per day`() {
+        val planAuthorized = ScheduledCleanPlanner.buildExecutionPlan(
+            authorization = ScheduledCleanAuthorization(
+                autoCleanEmptyFolders = true,
+                autoPurgeExpiredNexusTrash = false,
+                autoClearOwnCache = true
+            ),
+            emptyFoldersCount = 4,
+            expiredTrashFilesCount = 3,
+            expiredTrashBytes = 50_000_000L,
+            ownCacheBytes = 12_000_000L,
+            remainingCleanableBytes = 1_500_000_000L
+        )
+        assertTrue(planAuthorized.shouldDeleteEmptyFolders)
+        assertEquals(4, planAuthorized.emptyFoldersToCleanCount)
+        assertFalse(planAuthorized.shouldPurgeExpiredNexusTrash)
+        assertEquals(0L, planAuthorized.expiredTrashBytes)
+        assertTrue(planAuthorized.shouldClearOwnCache)
+        assertEquals(12_000_000L, planAuthorized.totalAutoCleanedBytes)
+        assertEquals(1_500_000_000L, planAuthorized.remainingBytesRequiringReview)
+
+        val now = 1_700_000_000_000L
+        val sixHoursAgo = now - (6L * 3600L * 1000L)
+        val twentyFiveHoursAgo = now - (25L * 3600L * 1000L)
+        assertFalse(ScheduledCleanPlanner.canSendDailyGroupedAlert(now, sixHoursAgo))
+        assertTrue(ScheduledCleanPlanner.canSendDailyGroupedAlert(now, twentyFiveHoursAgo))
+
+        val alerts = ScheduledCleanPlanner.evaluateSmartAlerts(
+            SmartAlertEvaluationInput(
+                storageAlertEnabled = true,
+                freeStorageBytes = 5L * 1024 * 1024 * 1024, // < 10%
+                totalStorageBytes = 128L * 1024 * 1024 * 1024,
+                junkOver1GbAlertEnabled = true,
+                totalCleanableJunkBytes = 2L * 1024 * 1024 * 1024, // > 1 GB
+                newAppBatteryAlertEnabled = true,
+                newAppHighBatteryName = "Jogo Pesado",
+                thermalAlertEnabled = true,
+                thermalLevel = ThermalLevelPt.GRAVE,
+                charge80AlertEnabled = true,
+                isCharging = true,
+                batteryPercent = 82,
+                chargeTargetPercent = 80
+            )
+        )
+        assertEquals(5, alerts.size)
+    }
 }

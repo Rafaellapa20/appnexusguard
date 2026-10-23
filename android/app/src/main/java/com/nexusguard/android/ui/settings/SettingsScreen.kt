@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
@@ -37,8 +39,10 @@ import com.nexusguard.android.BuildConfig
 import com.nexusguard.android.data.preferences.UserPreferencesState
 import com.nexusguard.android.data.repository.AppUpdateUiState
 import com.nexusguard.android.domain.NexusFormatters
+import com.nexusguard.android.domain.ScheduledCleanFrequency
 import com.nexusguard.android.ui.components.GaugeShieldLogo
 import com.nexusguard.android.ui.components.NexusCard
+import com.nexusguard.android.ui.components.NexusChip
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.components.NexusSystemIntents
 import com.nexusguard.android.ui.components.NexusTextButton
@@ -48,6 +52,7 @@ import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     preferences: UserPreferencesState,
@@ -59,9 +64,14 @@ fun SettingsScreen(
     onCheckUpdates: () -> Unit,
     onToggleDarkTheme: (Boolean) -> Unit,
     onToggleWeeklyScan: (Boolean) -> Unit,
+    onSetScheduledCleanSchedule: (Int, Int) -> Unit = { _, _ -> },
+    onSetScheduledAutoCleanOptions: (Boolean, Boolean, Boolean) -> Unit = { _, _, _ -> },
     onToggleStorageAlert: (Boolean) -> Unit,
+    onToggleJunkOver1GbAlert: (Boolean) -> Unit = {},
+    onToggleNewAppBatteryAlert: (Boolean) -> Unit = {},
     onToggleThermalAlert: (Boolean) -> Unit,
     onToggleBatteryAlert: (Boolean) -> Unit,
+    onToggleCharge80Alert: (Boolean) -> Unit = {},
     onReopenOnboarding: () -> Unit
 ) {
     val colors = NexusTheme.colors
@@ -122,28 +132,130 @@ fun SettingsScreen(
             )
             HorizontalDivider(color = colors.border)
             NexusToggleRow(
-                title = "Análise semanal agendada (WorkManager)",
-                subtitle = "Executa verificação em segundo plano 1x por semana",
+                title = "Limpeza agendada (WorkManager)",
+                subtitle = "Analisa e limpa apenas itens autorizados sem confirmação do sistema; notifica com botão «Rever» para o resto",
                 checked = preferences.weeklyScanEnabled,
                 onCheckedChange = onToggleWeeklyScan
             )
+            if (preferences.weeklyScanEnabled) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Frequência e hora preferida:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.textDim
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    ScheduledCleanFrequency.entries.forEach { freq ->
+                        NexusChip(
+                            text = freq.labelPt,
+                            color = if (preferences.scheduledCleanFrequencyDays == freq.intervalDays) colors.accent2 else colors.textDim,
+                            onClick = {
+                                onSetScheduledCleanSchedule(freq.intervalDays, preferences.scheduledCleanHourOfDay)
+                            }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(3, 9, 14, 21).forEach { hour ->
+                        val label = String.format("%02d:00", hour)
+                        NexusChip(
+                            text = label,
+                            color = if (preferences.scheduledCleanHourOfDay == hour) colors.accent2 else colors.textDim,
+                            onClick = {
+                                onSetScheduledCleanSchedule(preferences.scheduledCleanFrequencyDays, hour)
+                            }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                NexusToggleRow(
+                    title = "Auto-limpar pastas vazias",
+                    subtitle = "Sem confirmação do sistema (ignora .nomedia)",
+                    checked = preferences.autoCleanEmptyFolders,
+                    onCheckedChange = {
+                        onSetScheduledAutoCleanOptions(
+                            it,
+                            preferences.autoPurgeExpiredTrash,
+                            preferences.autoClearOwnCache
+                        )
+                    }
+                )
+                NexusToggleRow(
+                    title = "Auto-limpar Lixo Nexus expirado (> 30 dias)",
+                    subtitle = "Remove definitivamente itens com mais de 30 dias no Lixo Nexus",
+                    checked = preferences.autoPurgeExpiredTrash,
+                    onCheckedChange = {
+                        onSetScheduledAutoCleanOptions(
+                            preferences.autoCleanEmptyFolders,
+                            it,
+                            preferences.autoClearOwnCache
+                        )
+                    }
+                )
+                NexusToggleRow(
+                    title = "Auto-limpar cache própria da app",
+                    subtitle = "Limpa apenas a cache temporária interna do Nexus Guard",
+                    checked = preferences.autoClearOwnCache,
+                    onCheckedChange = {
+                        onSetScheduledAutoCleanOptions(
+                            preferences.autoCleanEmptyFolders,
+                            preferences.autoPurgeExpiredTrash,
+                            it
+                        )
+                    }
+                )
+            }
             HorizontalDivider(color = colors.border)
+            Text(
+                text = "Avisos inteligentes (máx. 1 notificação agrupada/dia)",
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.accent2
+            )
             NexusToggleRow(
-                title = "Notificação: Armazenamento < 10 %",
-                subtitle = "Canal dedicado de alerta de armazenamento",
+                title = "Aviso: Armazenamento < 10 %",
+                subtitle = "Avisa quando o espaço livre baixa de 10 %",
                 checked = preferences.storageAlertEnabled,
                 onCheckedChange = onToggleStorageAlert
             )
             HorizontalDivider(color = colors.border)
             NexusToggleRow(
-                title = "Notificação: Telemóvel quente",
+                title = "Aviso: Mais de 1 GB de lixo acumulado",
+                subtitle = "Avisa quando há mais de 1 GB pronto a limpar",
+                checked = preferences.junkOver1GbAlertEnabled,
+                onCheckedChange = onToggleJunkOver1GbAlert
+            )
+            HorizontalDivider(color = colors.border)
+            NexusToggleRow(
+                title = "Aviso: App nova a gastar muita bateria (24 h)",
+                subtitle = "Deteta apps recentes com consumo elevado nas últimas 24 h",
+                checked = preferences.newAppBatteryAlertEnabled,
+                onCheckedChange = onToggleNewAppBatteryAlert
+            )
+            HorizontalDivider(color = colors.border)
+            NexusToggleRow(
+                title = "Aviso: Telemóvel quente",
                 subtitle = "Avisa quando o estado térmico chega a Grave ou Crítico",
                 checked = preferences.thermalAlertEnabled,
                 onCheckedChange = onToggleThermalAlert
             )
             HorizontalDivider(color = colors.border)
             NexusToggleRow(
-                title = "Notificação: Bateria degradada",
+                title = "Aviso: Carga a ${preferences.chargeLimitTargetPercent} %",
+                subtitle = "Avisa quando a bateria atinge o limite configurado",
+                checked = preferences.chargeLimitAlarmEnabled,
+                onCheckedChange = onToggleCharge80Alert
+            )
+            HorizontalDivider(color = colors.border)
+            NexusToggleRow(
+                title = "Aviso: Bateria degradada",
                 subtitle = "Avisa se a saúde da bateria deixar de ser Boa",
                 checked = preferences.batteryAlertEnabled,
                 onCheckedChange = onToggleBatteryAlert

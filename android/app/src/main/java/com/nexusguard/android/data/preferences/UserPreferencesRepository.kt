@@ -30,7 +30,15 @@ data class UserPreferencesState(
     val chargeLimitTargetPercent: Int = 80,
     val activeChargeStartEpochMillis: Long = 0L,
     val activeChargeStartPercent: Int = 0,
-    val activeChargeMaxTempDeci: Int = 0
+    val activeChargeMaxTempDeci: Int = 0,
+    val scheduledCleanFrequencyDays: Int = 7,
+    val scheduledCleanHourOfDay: Int = 3,
+    val autoCleanEmptyFolders: Boolean = true,
+    val autoPurgeExpiredTrash: Boolean = true,
+    val autoClearOwnCache: Boolean = true,
+    val junkOver1GbAlertEnabled: Boolean = true,
+    val newAppBatteryAlertEnabled: Boolean = true,
+    val lastSmartAlertEpochMillis: Long = 0L
 )
 
 @Singleton
@@ -56,6 +64,14 @@ class UserPreferencesRepository @Inject constructor(
         val ACTIVE_CHARGE_START_MILLIS = longPreferencesKey("active_charge_start_millis")
         val ACTIVE_CHARGE_START_PERCENT = intPreferencesKey("active_charge_start_percent")
         val ACTIVE_CHARGE_MAX_TEMP_DECI = intPreferencesKey("active_charge_max_temp_deci")
+        val SCHEDULED_CLEAN_FREQ_DAYS = intPreferencesKey("scheduled_clean_freq_days")
+        val SCHEDULED_CLEAN_HOUR = intPreferencesKey("scheduled_clean_hour")
+        val AUTO_CLEAN_EMPTY_FOLDERS = booleanPreferencesKey("auto_clean_empty_folders")
+        val AUTO_PURGE_EXPIRED_TRASH = booleanPreferencesKey("auto_purge_expired_trash")
+        val AUTO_CLEAR_OWN_CACHE = booleanPreferencesKey("auto_clear_own_cache")
+        val JUNK_OVER_1GB_ALERT = booleanPreferencesKey("junk_over_1gb_alert")
+        val NEW_APP_BATTERY_ALERT = booleanPreferencesKey("new_app_battery_alert")
+        val LAST_SMART_ALERT_MILLIS = longPreferencesKey("last_smart_alert_millis")
     }
 
     val preferencesFlow: Flow<UserPreferencesState> = dataStore.data.map { prefs ->
@@ -78,7 +94,15 @@ class UserPreferencesRepository @Inject constructor(
             chargeLimitTargetPercent = prefs[Keys.CHARGE_LIMIT_TARGET_PERCENT] ?: 80,
             activeChargeStartEpochMillis = prefs[Keys.ACTIVE_CHARGE_START_MILLIS] ?: 0L,
             activeChargeStartPercent = prefs[Keys.ACTIVE_CHARGE_START_PERCENT] ?: 0,
-            activeChargeMaxTempDeci = prefs[Keys.ACTIVE_CHARGE_MAX_TEMP_DECI] ?: 0
+            activeChargeMaxTempDeci = prefs[Keys.ACTIVE_CHARGE_MAX_TEMP_DECI] ?: 0,
+            scheduledCleanFrequencyDays = prefs[Keys.SCHEDULED_CLEAN_FREQ_DAYS] ?: 7,
+            scheduledCleanHourOfDay = prefs[Keys.SCHEDULED_CLEAN_HOUR] ?: 3,
+            autoCleanEmptyFolders = prefs[Keys.AUTO_CLEAN_EMPTY_FOLDERS] ?: true,
+            autoPurgeExpiredTrash = prefs[Keys.AUTO_PURGE_EXPIRED_TRASH] ?: true,
+            autoClearOwnCache = prefs[Keys.AUTO_CLEAR_OWN_CACHE] ?: true,
+            junkOver1GbAlertEnabled = prefs[Keys.JUNK_OVER_1GB_ALERT] ?: true,
+            newAppBatteryAlertEnabled = prefs[Keys.NEW_APP_BATTERY_ALERT] ?: true,
+            lastSmartAlertEpochMillis = prefs[Keys.LAST_SMART_ALERT_MILLIS] ?: 0L
         )
     }
 
@@ -163,5 +187,36 @@ class UserPreferencesRepository @Inject constructor(
             prefs[Keys.ACTIVE_CHARGE_START_PERCENT] = 0
             prefs[Keys.ACTIVE_CHARGE_MAX_TEMP_DECI] = 0
         }
+    }
+
+    suspend fun setScheduledCleanSchedule(frequencyDays: Int, hourOfDay: Int) {
+        dataStore.edit { prefs ->
+            prefs[Keys.SCHEDULED_CLEAN_FREQ_DAYS] = frequencyDays
+            prefs[Keys.SCHEDULED_CLEAN_HOUR] = hourOfDay.coerceIn(0, 23)
+        }
+    }
+
+    suspend fun setScheduledAutoCleanOptions(
+        emptyFolders: Boolean,
+        expiredTrash: Boolean,
+        ownCache: Boolean
+    ) {
+        dataStore.edit { prefs ->
+            prefs[Keys.AUTO_CLEAN_EMPTY_FOLDERS] = emptyFolders
+            prefs[Keys.AUTO_PURGE_EXPIRED_TRASH] = expiredTrash
+            prefs[Keys.AUTO_CLEAR_OWN_CACHE] = ownCache
+        }
+    }
+
+    suspend fun setJunkOver1GbAlertEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.JUNK_OVER_1GB_ALERT] = enabled }
+    }
+
+    suspend fun setNewAppBatteryAlertEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.NEW_APP_BATTERY_ALERT] = enabled }
+    }
+
+    suspend fun setLastSmartAlertSent(epochMillis: Long) {
+        dataStore.edit { prefs -> prefs[Keys.LAST_SMART_ALERT_MILLIS] = epochMillis }
     }
 }

@@ -52,6 +52,7 @@ import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
 import com.nexusguard.android.ui.games.ActiveBoostScreen
 import com.nexusguard.android.ui.games.GamesScreen
 import com.nexusguard.android.ui.history.HistoryScreen
+import com.nexusguard.android.ui.history.MonthlyReportScreen
 import com.nexusguard.android.ui.home.HomeScreen
 import com.nexusguard.android.ui.navigation.NexusRoutes
 import com.nexusguard.android.ui.navigation.NexusTab
@@ -174,6 +175,12 @@ fun NexusGuardMainScreen(
                                 launchSingleTop = true
                             }
                         }
+                    )
+                }
+                NexusRoutes.MONTHLY_REPORT -> {
+                    SecondaryTopBar(
+                        title = "Relatório Mensal",
+                        onBack = { navController.popBackStack() }
                     )
                 }
                 NexusRoutes.ACTIVE_BOOST -> {
@@ -386,7 +393,18 @@ fun NexusGuardMainScreen(
                     entries = allHistory,
                     buildRestoreIntent = viewModel::buildRestoreFromTrashIntentSender,
                     onRestoreConfirmed = viewModel::onRestoreConfirmed,
-                    onExportPdf = viewModel::exportHistoryPdf
+                    onExportPdf = viewModel::exportHistoryPdf,
+                    onOpenMonthlyReport = {
+                        navController.navigate(NexusRoutes.MONTHLY_REPORT) {
+                            launchSingleTop = true
+                        }
+                    }
+                )
+            }
+            composable(NexusRoutes.MONTHLY_REPORT) {
+                MonthlyReportScreen(
+                    summary = viewModel.buildMonthlyReportSummary(),
+                    onExportMonthlyPdf = viewModel::exportMonthlyReportPdf
                 )
             }
             composable(NexusRoutes.SETTINGS) {
@@ -403,9 +421,14 @@ fun NexusGuardMainScreen(
                     onCheckUpdates = viewModel::checkForUpdatesManual,
                     onToggleDarkTheme = viewModel::setDarkTheme,
                     onToggleWeeklyScan = viewModel::setWeeklyScan,
+                    onSetScheduledCleanSchedule = viewModel::setScheduledCleanSchedule,
+                    onSetScheduledAutoCleanOptions = viewModel::setScheduledAutoCleanOptions,
                     onToggleStorageAlert = viewModel::setStorageAlert,
+                    onToggleJunkOver1GbAlert = viewModel::setJunkOver1GbAlert,
+                    onToggleNewAppBatteryAlert = viewModel::setNewAppBatteryAlert,
                     onToggleThermalAlert = viewModel::setThermalAlert,
                     onToggleBatteryAlert = viewModel::setBatteryAlert,
+                    onToggleCharge80Alert = { viewModel.setChargeLimitAlarm(it, preferences.chargeLimitTargetPercent) },
                     onReopenOnboarding = viewModel::reopenOnboarding
                 )
             }

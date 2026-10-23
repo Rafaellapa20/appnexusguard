@@ -50,7 +50,8 @@ fun HistoryScreen(
     entries: List<HistoryEntity>,
     buildRestoreIntent: (HistoryEntity) -> IntentSender?,
     onRestoreConfirmed: (Long) -> Unit,
-    onExportPdf: (Uri, (Boolean) -> Unit) -> Unit
+    onExportPdf: (Uri, (Boolean) -> Unit) -> Unit,
+    onOpenMonthlyReport: () -> Unit = {}
 ) {
     val colors = NexusTheme.colors
     val context = LocalContext.current
@@ -88,6 +89,19 @@ fun HistoryScreen(
         contentPadding = PaddingValues(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        item(key = "monthly_report_button") {
+            OutlinedButton(
+                onClick = onOpenMonthlyReport,
+                shape = NexusButtonShape,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Ver Relatório Mensal (30 dias + PDF)",
+                    color = colors.accent2
+                )
+            }
+        }
+
         item(key = "export_pdf_button") {
             NexusPrimaryGradientButton(
                 text = "Exportar Histórico em PDF",

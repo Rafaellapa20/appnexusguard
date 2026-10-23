@@ -23,6 +23,7 @@ import com.nexusguard.android.data.repository.RealSystemSnapshot
 import com.nexusguard.android.data.repository.SystemSensorsRepository
 import com.nexusguard.android.domain.AppImpactItem
 import com.nexusguard.android.domain.AppImpactPeriod
+import com.nexusguard.android.domain.MonthlyReportSummary
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.PhotoOptimizeQuality
 import com.nexusguard.android.domain.PhotoOptimizerCandidate
@@ -705,7 +706,84 @@ class MainViewModel @Inject constructor(
     fun setWeeklyScan(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setWeeklyScanEnabled(enabled)
-            SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(appContext, enabled)
+            val prefs = preferencesState.value
+            SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(
+                context = appContext,
+                enabled = enabled,
+                frequencyDays = prefs.scheduledCleanFrequencyDays,
+                targetHourOfDay = prefs.scheduledCleanHourOfDay
+            )
+        }
+    }
+
+    fun setScheduledCleanSchedule(frequencyDays: Int, hourOfDay: Int) {
+        viewModelScope.launch {
+            preferencesRepository.setScheduledCleanSchedule(frequencyDays, hourOfDay)
+            val enabled = preferencesState.value.weeklyScanEnabled
+            SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(
+                context = appContext,
+                enabled = enabled,
+                frequencyDays = frequencyDays,
+                targetHourOfDay = hourOfDay
+            )
+        }
+    }
+
+    fun setScheduledAutoCleanOptions(emptyFolders: Boolean, expiredTrash: Boolean, ownCache: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setScheduledAutoCleanOptions(emptyFolders, expiredTrash, ownCache)
+        }
+    }
+
+    fun setJunkOver1GbAlert(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setJunkOver1GbAlertEnabled(enabled)
+        }
+    }
+
+    fun setNewAppBatteryAlert(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setNewAppBatteryAlertEnabled(enabled)
+        }
+    }
+
+    fun buildMonthlyReportSummary(): MonthlyReportSummary {
+        val now = System.currentTimeMillis()
+        val cutoff30d = now - (30L * 24L * 3600L * 1000L)
+        val entries30d = allHistory.value.filter { it.timestampEpochMillis >= cutoff30d }
+        val totalFreed = entries30d.filter { !it.isRestored }.sumOf { it.bytesFreed }
+        val healthRegex = Regex("""Saúde (\d+)/100""")
+        val healthPoints = entries30d
+            .reversed()
+            .mapNotNull { entry ->
+                healthRegex.find(entry.title)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            }
+            .toMutableList()
+            .apply {
+                add(liveSnapshot.value.healthScore)
+            }
+        val measuredBattery = batteryUiState.value.measuredConsumption
+        val topApps = _appsImpactUiState.value.apps
+            .sortedByDescending { it.totalStorageBytes + (it.batteryImpactScoreMillis * 10L) }
+            .take(5)
+
+        return MonthlyReportSummary(
+            periodLabelPt = "Últimos 30 dias",
+            totalBytesFreed30d = totalFreed,
+            actionsCount30d = entries30d.size,
+            currentHealthScore = liveSnapshot.value.healthScore,
+            healthEvolutionPoints = healthPoints,
+            topImpactApps = topApps,
+            avgScreenOnDrainPerHour = measuredBattery.screenOnDrainPercentPerHour,
+            avgIdleDrainPerHour = measuredBattery.screenOffIdleDrainPercentPerHour
+        )
+    }
+
+    fun exportMonthlyReportPdf(targetUri: Uri, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val summary = buildMonthlyReportSummary()
+            val ok = PdfReportExporter.exportMonthlyReportToPdf(appContext, targetUri, summary)
+            onResult(ok)
         }
     }
 
