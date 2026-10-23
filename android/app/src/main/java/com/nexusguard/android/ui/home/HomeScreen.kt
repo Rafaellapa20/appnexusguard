@@ -56,10 +56,13 @@ import com.nexusguard.android.domain.ThermalLevelPt
 import com.nexusguard.android.ui.HomeUiState
 import com.nexusguard.android.ui.components.NexusCard
 import com.nexusguard.android.ui.components.NexusChip
+import com.nexusguard.android.ui.components.NexusEmptyStateCard
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
+import com.nexusguard.android.ui.components.NexusShimmerBox
 import com.nexusguard.android.ui.components.NexusSystemIntents
 import com.nexusguard.android.ui.components.NexusTextButton
 import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
+import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
 import java.util.Locale
@@ -388,6 +391,7 @@ fun HomeScreen(
                 label = "Armazenamento",
                 value = freeGbText,
                 subtitle = if (isLoading) "A calcular..." else "livres de $totalGbText",
+                isLoading = isLoading,
                 useMonoFont = true,
                 onClick = onOpenClean
             )
@@ -397,6 +401,7 @@ fun HomeScreen(
                 label = "Bateria",
                 value = if (isLoading) "—" else "${uiState.battery.levelPercent}%",
                 subtitle = if (isLoading) "A ler..." else "${uiState.battery.healthLabelPt.lowercase()} · $tempText",
+                isLoading = isLoading,
                 useMonoFont = true,
                 onClick = onOpenBattery
             )
@@ -412,6 +417,7 @@ fun HomeScreen(
                 label = "Térmica",
                 value = if (isLoading) "—" else uiState.thermal.level.labelPt,
                 subtitle = uiState.thermal.headroomText,
+                isLoading = isLoading,
                 useMonoFont = false,
                 onClick = onOpenSystem
             )
@@ -421,6 +427,7 @@ fun HomeScreen(
                 label = "Apps sem uso",
                 value = unusedValueText,
                 subtitle = unusedSubtitleText,
+                isLoading = isLoading,
                 useMonoFont = true,
                 onClick = onOpenSystem
             )
@@ -439,11 +446,12 @@ fun HomeScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             if (uiState.recentHistory.isEmpty()) {
-                Text(
-                    text = "Sem ações registadas ainda. Ao analisar, limpar ou usar o Boost, tudo fica registado aqui.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.textDim,
-                    modifier = Modifier.padding(vertical = 8.dp)
+                NexusEmptyStateCard(
+                    title = "Sem ações registadas",
+                    subtitle = "Ao analisar ou limpar o dispositivo, as ações ficam registadas aqui.",
+                    icon = NexusIcons.EmptyStateShield,
+                    actionLabel = "Limpeza profunda",
+                    onActionClick = onStartDeepClean
                 )
             } else {
                 uiState.recentHistory.forEachIndexed { idx, entry ->
@@ -468,6 +476,7 @@ private fun HomeStatusCard(
     label: String,
     value: String,
     subtitle: String,
+    isLoading: Boolean = false,
     useMonoFont: Boolean,
     onClick: () -> Unit
 ) {
@@ -496,23 +505,29 @@ private fun HomeStatusCard(
             )
         }
         Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = value,
-            style = if (useMonoFont) {
-                NexusMonoTextStyles.metricLarge
-            } else {
-                MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            },
-            color = colors.text
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.textMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        if (isLoading) {
+            NexusShimmerBox(width = 72.dp, height = 24.dp)
+            Spacer(modifier = Modifier.height(6.dp))
+            NexusShimmerBox(width = 110.dp, height = 14.dp)
+        } else {
+            Text(
+                text = value,
+                style = if (useMonoFont) {
+                    NexusMonoTextStyles.metricLarge
+                } else {
+                    MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                },
+                color = colors.text
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

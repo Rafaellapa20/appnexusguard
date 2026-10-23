@@ -35,11 +35,15 @@ import androidx.compose.ui.unit.dp
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.ui.components.NexusCard
+import com.nexusguard.android.ui.components.NexusEmptyStateCard
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
 import com.nexusguard.android.ui.theme.NexusButtonShape
 import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HistoryScreen(
@@ -97,28 +101,21 @@ fun HistoryScreen(
 
         if (entries.isEmpty()) {
             item(key = "empty_history") {
-                NexusCard(
-                    backgroundColor = colors.surface,
-                    borderColor = colors.border
-                ) {
-                    Text(
-                        text = "Histórico vazio",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = colors.text
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Todas as análises, limpezas e sessões de Boost que executares no telemóvel serão gravadas aqui na base de dados local (Room).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textDim
-                    )
-                }
+                NexusEmptyStateCard(
+                    title = "Histórico vazio",
+                    subtitle = "Todas as análises, limpezas e sessões executadas no telemóvel ficam registadas aqui na base de dados local (Room).",
+                    icon = NexusIcons.History
+                )
             }
         } else {
             items(
                 items = entries,
                 key = { it.id }
             ) { entry ->
+                val restoreUntilDate = remember(entry.timestampEpochMillis) {
+                    val fmt = SimpleDateFormat("dd/MM/yyyy", Locale.forLanguageTag("pt-PT"))
+                    fmt.format(Date(entry.timestampEpochMillis + 30L * 24L * 3600_000L))
+                }
                 NexusCard(
                     backgroundColor = colors.surface,
                     borderColor = colors.border
@@ -148,7 +145,13 @@ fun HistoryScreen(
                         color = colors.textDim
                     )
                     if (entry.canRestore && !entry.isRestored) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Pode ser restaurado até $restoreUntilDate",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.accent2
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
                         OutlinedButton(
                             onClick = {
                                 val sender = buildRestoreIntent(entry)
@@ -169,11 +172,11 @@ fun HistoryScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Restaurar do Lixo (30 dias)", color = colors.text)
+                            Text("Restaurar", color = colors.text)
                         }
                     } else if (entry.isRestored) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text("✓ Restaurado do Lixo", style = NexusMonoTextStyles.badge, color = colors.ok)
+                        Text("✓ Libertado e restaurado do Lixo", style = NexusMonoTextStyles.badge, color = colors.ok)
                     }
                 }
             }

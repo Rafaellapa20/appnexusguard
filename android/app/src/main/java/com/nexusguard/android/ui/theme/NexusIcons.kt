@@ -590,4 +590,268 @@ object NexusIcons {
             }
         }.build()
     }
+
+    // Fase 4: Ícones das categorias com traço de 1,5 dp e cantos arredondados
+    val CategoryCache: ImageVector by lazy {
+        strokeIcon("CategoryCache") {
+            moveTo(4f, 7f)
+            lineTo(12f, 3f)
+            lineTo(20f, 7f)
+            lineTo(12f, 11f)
+            close()
+            moveTo(4f, 12f)
+            lineTo(12f, 16f)
+            lineTo(20f, 12f)
+            moveTo(4f, 17f)
+            lineTo(12f, 21f)
+            lineTo(20f, 17f)
+        }
+    }
+
+    val CategoryApk: ImageVector by lazy {
+        strokeIcon("CategoryApk") {
+            moveTo(7f, 10f)
+            arcTo(5f, 5f, 0f, false, true, 17f, 10f)
+            verticalLineTo(18f)
+            curveTo(17f, 19.1f, 16.1f, 20f, 15f, 20f)
+            horizontalLineTo(9f)
+            curveTo(7.9f, 20f, 7f, 19.1f, 7f, 18f)
+            close()
+            moveTo(9f, 5.5f)
+            lineTo(7.5f, 3.5f)
+            moveTo(15f, 5.5f)
+            lineTo(16.5f, 3.5f)
+            moveTo(10f, 9f)
+            horizontalLineTo(10.1f)
+            moveTo(14f, 9f)
+            horizontalLineTo(14.1f)
+        }
+    }
+
+    val CategoryJunk: ImageVector by lazy {
+        strokeIcon("CategoryJunk") {
+            moveTo(4f, 7f)
+            horizontalLineTo(20f)
+            moveTo(9f, 7f)
+            verticalLineTo(4f)
+            horizontalLineTo(15f)
+            verticalLineTo(7f)
+            moveTo(6f, 7f)
+            lineTo(7f, 20f)
+            horizontalLineTo(17f)
+            lineTo(18f, 7f)
+            moveTo(10f, 11f)
+            verticalLineTo(16f)
+            moveTo(14f, 11f)
+            verticalLineTo(16f)
+        }
+    }
+
+    val CategoryDuplicates: ImageVector by lazy {
+        strokeIcon("CategoryDuplicates") {
+            moveTo(8f, 8f)
+            horizontalLineTo(19f)
+            verticalLineTo(19f)
+            horizontalLineTo(8f)
+            close()
+            moveTo(16f, 8f)
+            verticalLineTo(5f)
+            horizontalLineTo(5f)
+            verticalLineTo(16f)
+            horizontalLineTo(8f)
+        }
+    }
+
+    val CategoryEmptyFolder: ImageVector by lazy {
+        strokeIcon("CategoryEmptyFolder") {
+            moveTo(3f, 6f)
+            horizontalLineTo(9f)
+            lineTo(11f, 8f)
+            horizontalLineTo(21f)
+            verticalLineTo(19f)
+            horizontalLineTo(3f)
+            close()
+            moveTo(9f, 13.5f)
+            horizontalLineTo(15f)
+        }
+    }
+
+    val CategoryLeftovers: ImageVector by lazy {
+        strokeIcon("CategoryLeftovers") {
+            moveTo(12f, 3f)
+            lineTo(20f, 7.5f)
+            verticalLineTo(16.5f)
+            lineTo(12f, 21f)
+            lineTo(4f, 16.5f)
+            verticalLineTo(7.5f)
+            close()
+            moveTo(12f, 12f)
+            lineTo(20f, 7.5f)
+            moveTo(12f, 12f)
+            lineTo(4f, 7.5f)
+            moveTo(12f, 12f)
+            verticalLineTo(21f)
+        }
+    }
+
+    val CategorySimilarPhotos: ImageVector by lazy {
+        strokeIcon("CategorySimilarPhotos") {
+            moveTo(4f, 6f)
+            horizontalLineTo(16f)
+            verticalLineTo(16f)
+            horizontalLineTo(4f)
+            close()
+            moveTo(8f, 16f)
+            verticalLineTo(19f)
+            horizontalLineTo(20f)
+            verticalLineTo(9f)
+            horizontalLineTo(16f)
+            moveTo(5.5f, 13.5f)
+            lineTo(8.5f, 10.5f)
+            lineTo(11f, 13f)
+            lineTo(13.5f, 11f)
+            lineTo(15.5f, 13.5f)
+        }
+    }
+
+    val CategoryBlurryPhotos: ImageVector by lazy {
+        strokeIcon("CategoryBlurryPhotos") {
+            moveTo(12f, 4f)
+            curveTo(8f, 9f, 6f, 12f, 6f, 15f)
+            arcTo(6f, 6f, 0f, false, false, 18f, 15f)
+            curveTo(18f, 12f, 16f, 9f, 12f, 4f)
+            close()
+            moveTo(9.5f, 15.5f)
+            arcTo(2.5f, 2.5f, 0f, false, false, 12f, 18f)
+        }
+    }
+
+    val CategoryScreenshots: ImageVector by lazy {
+        strokeIcon("CategoryScreenshots") {
+            moveTo(7f, 3f)
+            horizontalLineTo(17f)
+            curveTo(18.1f, 3f, 19f, 3.9f, 19f, 5f)
+            verticalLineTo(19f)
+            curveTo(19f, 20.1f, 18.1f, 21f, 17f, 21f)
+            horizontalLineTo(7f)
+            curveTo(5.9f, 21f, 5f, 20.1f, 5f, 19f)
+            verticalLineTo(5f)
+            curveTo(5f, 3.9f, 5.9f, 3f, 7f, 3f)
+            close()
+            moveTo(9f, 8f)
+            horizontalLineTo(11f)
+            moveTo(9f, 8f)
+            verticalLineTo(10f)
+            moveTo(15f, 16f)
+            horizontalLineTo(13f)
+            moveTo(15f, 16f)
+            verticalLineTo(14f)
+        }
+    }
+
+    val CategoryDownloads: ImageVector by lazy {
+        strokeIcon("CategoryDownloads") {
+            moveTo(12f, 4f)
+            verticalLineTo(15f)
+            moveTo(8f, 11f)
+            lineTo(12f, 15f)
+            lineTo(16f, 11f)
+            moveTo(5f, 19f)
+            horizontalLineTo(19f)
+        }
+    }
+
+    val CategoryLargeFiles: ImageVector by lazy {
+        strokeIcon("CategoryLargeFiles") {
+            moveTo(6f, 3f)
+            horizontalLineTo(14f)
+            lineTo(19f, 8f)
+            verticalLineTo(20f)
+            horizontalLineTo(6f)
+            close()
+            moveTo(14f, 3f)
+            verticalLineTo(8f)
+            horizontalLineTo(19f)
+            moveTo(9f, 14f)
+            horizontalLineTo(16f)
+            moveTo(9f, 17f)
+            horizontalLineTo(14f)
+        }
+    }
+
+    val CategoryMessaging: ImageVector by lazy {
+        strokeIcon("CategoryMessaging") {
+            moveTo(4f, 5f)
+            horizontalLineTo(20f)
+            verticalLineTo(16f)
+            horizontalLineTo(8f)
+            lineTo(4f, 20f)
+            close()
+            moveTo(8f, 9.5f)
+            horizontalLineTo(16f)
+            moveTo(8f, 12.5f)
+            horizontalLineTo(13f)
+        }
+    }
+
+    val AppsGrid: ImageVector by lazy {
+        strokeIcon("AppsGrid") {
+            moveTo(4f, 4f)
+            horizontalLineTo(10f)
+            verticalLineTo(10f)
+            horizontalLineTo(4f)
+            close()
+            moveTo(14f, 4f)
+            horizontalLineTo(20f)
+            verticalLineTo(10f)
+            horizontalLineTo(14f)
+            close()
+            moveTo(4f, 14f)
+            horizontalLineTo(10f)
+            verticalLineTo(20f)
+            horizontalLineTo(4f)
+            close()
+            moveTo(14f, 14f)
+            horizontalLineTo(20f)
+            verticalLineTo(20f)
+            horizontalLineTo(14f)
+            close()
+        }
+    }
+
+    val EmptyStateShield: ImageVector by lazy {
+        strokeIcon("EmptyStateShield") {
+            moveTo(12f, 3f)
+            lineTo(19f, 6f)
+            verticalLineTo(11.5f)
+            curveTo(19f, 16.2f, 15.9f, 19.6f, 12f, 21f)
+            curveTo(8.1f, 19.6f, 5f, 16.2f, 5f, 11.5f)
+            verticalLineTo(6f)
+            close()
+            moveTo(9f, 12f)
+            lineTo(11f, 14f)
+            lineTo(15.5f, 9.5f)
+        }
+    }
+
+    private fun strokeIcon(
+        name: String,
+        builder: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit
+    ): ImageVector {
+        return ImageVector.Builder(
+            name = name,
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+                pathBuilder = builder
+            )
+        }.build()
+    }
 }

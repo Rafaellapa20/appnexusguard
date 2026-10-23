@@ -12,6 +12,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -100,13 +103,16 @@ import com.nexusguard.android.ui.components.FileThumbnailOrTypeBadge
 import com.nexusguard.android.ui.components.NexusCard
 import com.nexusguard.android.ui.components.NexusCheckbox48dp
 import com.nexusguard.android.ui.components.NexusChip
+import com.nexusguard.android.ui.components.NexusEmptyStateCard
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
+import com.nexusguard.android.ui.components.NexusShimmerBox
 import com.nexusguard.android.ui.components.NexusSystemIntents
 import com.nexusguard.android.ui.components.NexusTextButton
 import com.nexusguard.android.ui.components.rememberScaledAnimationDuration
 import com.nexusguard.android.ui.theme.NexusIcons
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
+import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.collections.immutable.persistentListOf
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -114,7 +120,24 @@ import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+private fun iconForCategory(type: CleanCategoryType): ImageVector {
+    return when (type) {
+        CleanCategoryType.APP_CACHE -> NexusIcons.CategoryCache
+        CleanCategoryType.INSTALLED_APKS, CleanCategoryType.UNINSTALLED_OLD_APKS -> NexusIcons.CategoryApk
+        CleanCategoryType.FILESYSTEM_JUNK -> NexusIcons.CategoryJunk
+        CleanCategoryType.DUPLICATES -> NexusIcons.CategoryDuplicates
+        CleanCategoryType.EMPTY_FOLDERS -> NexusIcons.CategoryEmptyFolder
+        CleanCategoryType.UNINSTALLED_LEFTOVERS -> NexusIcons.CategoryLeftovers
+        CleanCategoryType.SIMILAR_PHOTOS -> NexusIcons.CategorySimilarPhotos
+        CleanCategoryType.BLURRY_PHOTOS -> NexusIcons.CategoryBlurryPhotos
+        CleanCategoryType.OLD_SCREENSHOTS -> NexusIcons.CategoryScreenshots
+        CleanCategoryType.OLD_DOWNLOADS -> NexusIcons.CategoryDownloads
+        CleanCategoryType.LARGE_FILES -> NexusIcons.CategoryLargeFiles
+        CleanCategoryType.MESSAGING_MEDIA -> NexusIcons.CategoryMessaging
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun CleanScreen(
     uiState: CleanUiState,
@@ -302,375 +325,398 @@ fun CleanScreen(
     val totalSelectedBytes = selectedFilesToTrash.sumOf { it.sizeBytes }
     val totalSelectedFormatted = NexusFormatters.formatBytes(totalSelectedBytes)
 
-    // 3.º Momento: Revisão (grelha para fotos/vídeos, lista para outros, comparação lado a lado para fotos semelhantes, seleção em intervalo)
-    previewCategory?.let { group ->
-        ModalBottomSheet(
-            onDismissRequest = { previewCategory = null },
-            containerColor = colors.bgRaised,
-            contentColor = colors.text
-        ) {
-            CategoryReviewSheetContent(
-                group = group,
-                hasMediaPermission = cleanReport.hasMediaPermission,
-                hasUsageStatsPermission = cleanReport.hasUsageStatsPermission,
-                hasManageStoragePermission = cleanReport.hasManageStoragePermission,
-                isFileChecked = { file -> isFileChecked(file, group.type) },
-                onToggleFile = { file -> toggleFileChecked(file, group.type) },
-                onSelectRange = { files, start, end -> selectRangeOfFiles(files, group.type, start, end) },
-                onClearAllAppCache = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        cacheBytesBeforeDialog = group.totalSizeBytes
-                        try {
-                            clearCacheDialogLauncher.launch(Intent(StorageManager.ACTION_CLEAR_APP_CACHE))
-                        } catch (_: Exception) {
-                            NexusSystemIntents.openSystemClearCacheAction(context)
-                        }
-                    } else {
-                        NexusSystemIntents.openSystemClearCacheAction(context)
-                    }
-                },
-                onClose = { previewCategory = null }
-            )
-        }
-    }
-
-    // 2.º Momento: Ecrã de resultado («Podes libertar X», barra antes/depois projetada, categorias seguras vs revisão)
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Cabeçalho Herói: «Podes libertar X» + Barra de Armazenamento antes/depois projetada
-            NexusCard(
-                backgroundColor = colors.surface,
-                borderColor = colors.borderStrong,
-                contentPadding = PaddingValues(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+    // Fase 4: SharedTransitionLayout do cartão da categoria para a vista de revisão
+    SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
+        AnimatedContent(
+            targetState = previewCategory,
+            transitionSpec = {
+                fadeIn(spring(dampingRatio = 0.8f, stiffness = 400f)) togetherWith
+                    fadeOut(spring(dampingRatio = 0.8f, stiffness = 400f))
+            },
+            label = "cleanSharedTransition"
+        ) { activeReviewGroup ->
+            if (activeReviewGroup != null) {
+                // 3.º Momento: Revisão com SharedTransition a partir do cartão da categoria
+                Surface(
+                    color = colors.bg,
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Podes libertar",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = colors.textDim
-                        )
-                        val heroBytes = if (totalSelectedBytes > 0L) totalSelectedBytes else cleanReport.totalCleanableBytes
-                        AnimatedContent(
-                            targetState = NexusFormatters.formatBytes(heroBytes),
-                            transitionSpec = {
-                                fadeIn(tween(180)) togetherWith fadeOut(tween(180))
-                            },
-                            label = "heroCleanableBytes"
-                        ) { heroFormatted ->
-                            Text(
-                                text = heroFormatted,
-                                style = NexusMonoTextStyles.metricHero.copy(fontSize = 34.sp),
-                                color = if (heroBytes > 0L) colors.accent2 else colors.text
-                            )
-                        }
-                        Text(
-                            text = if (totalSelectedBytes > 0L) {
-                                "${selectedFilesToTrash.size} ficheiro(s) marcados · Total detetado: ${NexusFormatters.formatBytes(cleanReport.totalCleanableBytes)}"
+                    CategoryReviewSheetContent(
+                        group = activeReviewGroup,
+                        sharedTransitionScope = this@SharedTransitionLayout,
+                        animatedVisibilityScope = this@AnimatedContent,
+                        hasMediaPermission = cleanReport.hasMediaPermission,
+                        hasUsageStatsPermission = cleanReport.hasUsageStatsPermission,
+                        hasManageStoragePermission = cleanReport.hasManageStoragePermission,
+                        isFileChecked = { file -> isFileChecked(file, activeReviewGroup.type) },
+                        onToggleFile = { file -> toggleFileChecked(file, activeReviewGroup.type) },
+                        onSelectRange = { files, start, end -> selectRangeOfFiles(files, activeReviewGroup.type, start, end) },
+                        onClearAllAppCache = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                cacheBytesBeforeDialog = activeReviewGroup.totalSizeBytes
+                                try {
+                                    clearCacheDialogLauncher.launch(Intent(StorageManager.ACTION_CLEAR_APP_CACHE))
+                                } catch (_: Exception) {
+                                    NexusSystemIntents.openSystemClearCacheAction(context)
+                                }
                             } else {
-                                "${cleanReport.scannedFilesCount} ficheiros analisados no dispositivo"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.textMuted
-                        )
-                    }
-                    IconButton(
-                        onClick = onRefreshScan,
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                    ) {
-                        Icon(
-                            imageVector = NexusIcons.Refresh,
-                            contentDescription = "Nova análise profunda",
-                            tint = colors.accent2
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Barra antes / depois projetada
-                val projectedUsedBytes = (storage.usedBytes - totalSelectedBytes).coerceAtLeast(0L)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Antes: ${NexusFormatters.formatBytes(storage.usedBytes)} usados",
-                        style = NexusMonoTextStyles.metricSmall,
-                        color = colors.textDim
-                    )
-                    Text(
-                        text = "Depois: ${NexusFormatters.formatBytes(projectedUsedBytes)} (${NexusFormatters.formatBytes(storage.freeBytes + totalSelectedBytes)} livres)",
-                        style = NexusMonoTextStyles.metricSmall,
-                        color = colors.ok
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                ProportionalStorageBar(
-                    totalBytes = storage.totalBytes,
-                    appsBytes = storage.appsAndSystemBytes,
-                    photosBytes = storage.photosBytes,
-                    videosBytes = storage.videosBytes,
-                    cleanableBytes = totalSelectedBytes.coerceAtLeast(cleanReport.totalCleanableBytes)
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    StorageLegendDot(
-                        color = colors.accent,
-                        label = if (uiState.isLoading) "Apps/Sist. —" else "Apps/Sist. ${NexusFormatters.formatBytes(storage.appsAndSystemBytes)}"
-                    )
-                    StorageLegendDot(
-                        color = colors.accent2,
-                        label = if (uiState.isLoading) "Fotos —" else "Fotos ${NexusFormatters.formatBytes(storage.photosBytes)}"
-                    )
-                    StorageLegendDot(
-                        color = colors.ok,
-                        label = if (uiState.isLoading) "Vídeos —" else "Vídeos ${NexusFormatters.formatBytes(storage.videosBytes)}"
-                    )
-                    StorageLegendDot(
-                        color = colors.warn,
-                        label = "Libertável ${NexusFormatters.formatBytes(cleanReport.totalCleanableBytes)}"
-                    )
-                    StorageLegendDot(
-                        color = colors.textMuted,
-                        label = if (uiState.isLoading) "Livre —" else "Livre ${NexusFormatters.formatBytes(storage.freeBytes)}"
-                    )
-                }
-            }
-
-            // Se ainda não tiver permissão de leitura de media, mostra explicação clara e botão
-            if (!cleanReport.hasMediaPermission) {
-                NexusCard(
-                    backgroundColor = colors.surfaceAlt,
-                    borderColor = colors.accent,
-                    contentPadding = PaddingValues(14.dp)
-                ) {
-                    Text(
-                        text = "Permissão necessária para analisar ficheiros",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = colors.text
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Para encontrar duplicados reais (SHA-256), fotos semelhantes (dHash), capturas antigas e ficheiros grandes com pré-visualização, autoriza o acesso aos ficheiros multimédia.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textDim
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    NexusPrimaryGradientButton(
-                        text = "Permitir leitura de ficheiros",
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                mediaPermissionLauncher.launch(
-                                    arrayOf(
-                                        Manifest.permission.READ_MEDIA_IMAGES,
-                                        Manifest.permission.READ_MEDIA_VIDEO,
-                                        Manifest.permission.READ_MEDIA_AUDIO
-                                    )
-                                )
-                            } else {
-                                mediaPermissionLauncher.launch(
-                                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-                                )
+                                NexusSystemIntents.openSystemClearCacheAction(context)
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        onClose = { previewCategory = null }
                     )
                 }
-            }
-
-            val displayCategories = if (cleanReport.categories.isNotEmpty()) {
-                cleanReport.categories
             } else {
-                CleanCategoryType.entries
-                    .filter { !it.requiresFullFlavorManageStorage || BuildConfig.IS_FULL_FLAVOR }
-                    .map {
-                        CleanCategoryGroup(
-                            type = it,
-                            subtitlePt = it.emptySubtitlePt,
-                            files = persistentListOf(),
-                            totalSizeBytes = 0L
-                        )
-                    }
-            }
-
-            val safeCategories = displayCategories.filter { it.type.isSafePreselected }
-            val reviewCategories = displayCategories.filter { !it.type.isSafePreselected }
-
-            Text(
-                text = "Limpeza segura (pré-selecionada)",
-                style = MaterialTheme.typography.labelMedium,
-                color = colors.ok
-            )
-            safeCategories.forEach { group ->
-                val isSelected = group.type in selectedCategories
-                CleanCategoryRealRow(
-                    group = group,
-                    isSelected = isSelected,
-                    isScanning = false,
-                    onToggleSelect = {
-                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                        if (isSelected) {
-                            selectedCategories.remove(group.type)
-                        } else {
-                            selectedCategories.add(group.type)
-                        }
-                    },
-                    onOpenPreview = { previewCategory = group }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Requer revisão manual (desmarcada por omissão)",
-                style = MaterialTheme.typography.labelMedium,
-                color = colors.warn
-            )
-            reviewCategories.forEach { group ->
-                val isSelected = group.type in selectedCategories
-                CleanCategoryRealRow(
-                    group = group,
-                    isSelected = isSelected,
-                    isScanning = false,
-                    onToggleSelect = {
-                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                        if (isSelected) {
-                            selectedCategories.remove(group.type)
-                        } else {
-                            selectedCategories.add(group.type)
-                            previewCategory = group
-                        }
-                    },
-                    onOpenPreview = { previewCategory = group }
-                )
-            }
-
-            // Opção avançada MANAGE_EXTERNAL_STORAGE (apenas no flavor Full se não concedida)
-            if (BuildConfig.IS_FULL_FLAVOR &&
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                !cleanReport.hasManageStoragePermission
-            ) {
-                NexusCard(
-                    backgroundColor = colors.surface,
-                    borderColor = colors.border,
-                    contentPadding = PaddingValues(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                // 2.º Momento: Ecrã de resultado («Podes libertar X», barra antes/depois projetada, categorias seguras vs revisão)
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 18.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Modo avançado: Restos de apps, subpastas APK e Lixo Nexus",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                color = colors.text
-                            )
-                            Text(
-                                text = "Opcional: concede MANAGE_EXTERNAL_STORAGE para restos em Android/media e limpeza global de cache",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.textDim
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        NexusChip(
-                            text = "Autorizar",
-                            color = colors.accent2,
-                            onClick = { NexusSystemIntents.openManageAllFilesSettings(context) }
-                        )
-                    }
-                }
-            }
-        }
-
-        // Barra fixa inferior «Limpar X» / «Mover para o Lixo · X»
-        val animDuration = rememberScaledAnimationDuration(180)
-        Surface(
-            color = colors.bgRaised,
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(elevation = 10.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 10.dp)
-            ) {
-                NexusPrimaryGradientButton(
-                    text = "Limpar $totalSelectedFormatted",
-                    enabled = selectedFilesToTrash.isNotEmpty() || selectedEmptyFolders.isNotEmpty(),
-                    onClick = {
-                        val intentSender = buildTrashIntent(selectedFilesToTrash)
-                        if (intentSender != null) {
-                            pendingTrashFiles = selectedFilesToTrash
-                            pendingEmptyFolders = selectedEmptyFolders
-                            trashIntentLauncher.launch(
-                                IntentSenderRequest.Builder(intentSender).build()
-                            )
-                        } else if (selectedFilesToTrash.isNotEmpty() || selectedEmptyFolders.isNotEmpty()) {
-                            onTrashConfirmed(selectedFilesToTrash, selectedEmptyFolders)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    contentSlot = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
+                        // Cabeçalho Herói: «Podes libertar X» + Barra de Armazenamento antes/depois projetada
+                        NexusCard(
+                            backgroundColor = colors.surface,
+                            borderColor = colors.borderStrong,
+                            contentPadding = PaddingValues(16.dp)
                         ) {
-                            Text(
-                                text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                    "Limpar (Mover para o Lixo) · "
-                                } else {
-                                    "Limpar · "
-                                },
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = colors.onAccent
-                            )
-                            AnimatedContent(
-                                targetState = totalSelectedFormatted,
-                                transitionSpec = {
-                                    fadeIn(tween(animDuration)) togetherWith fadeOut(tween(animDuration))
-                                },
-                                label = "cleanTotalAnimated"
-                            ) { formattedTotal ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Podes libertar",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = colors.textDim
+                                    )
+                                    if (uiState.isLoading) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        NexusShimmerBox(width = 140.dp, height = 34.dp)
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                    } else {
+                                        val heroBytes = if (totalSelectedBytes > 0L) totalSelectedBytes else cleanReport.totalCleanableBytes
+                                        AnimatedContent(
+                                            targetState = NexusFormatters.formatBytes(heroBytes),
+                                            transitionSpec = {
+                                                fadeIn(tween(180)) togetherWith fadeOut(tween(180))
+                                            },
+                                            label = "heroCleanableBytes"
+                                        ) { heroFormatted ->
+                                            Text(
+                                                text = heroFormatted,
+                                                style = NexusMonoTextStyles.metricHero.copy(fontSize = 34.sp),
+                                                color = if (heroBytes > 0L) colors.accent2 else colors.text
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = if (totalSelectedBytes > 0L) {
+                                            "${selectedFilesToTrash.size} ficheiro(s) marcados · Total detetado: ${NexusFormatters.formatBytes(cleanReport.totalCleanableBytes)}"
+                                        } else {
+                                            "${cleanReport.scannedFilesCount} ficheiros analisados no dispositivo"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.textMuted
+                                    )
+                                }
+                                IconButton(
+                                    onClick = onRefreshScan,
+                                    modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = NexusIcons.Refresh,
+                                        contentDescription = "Nova análise profunda",
+                                        tint = colors.accent2
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Barra antes / depois projetada
+                            val projectedUsedBytes = (storage.usedBytes - totalSelectedBytes).coerceAtLeast(0L)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
                                 Text(
-                                    text = formattedTotal,
-                                    style = NexusMonoTextStyles.metricMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = colors.onAccent
+                                    text = if (uiState.isLoading) "Antes: —" else "Antes: ${NexusFormatters.formatBytes(storage.usedBytes)} usados",
+                                    style = NexusMonoTextStyles.metricSmall,
+                                    color = colors.textDim
+                                )
+                                Text(
+                                    text = if (uiState.isLoading) "Depois: —" else "Depois: ${NexusFormatters.formatBytes(projectedUsedBytes)} (${NexusFormatters.formatBytes(storage.freeBytes + totalSelectedBytes)} livres)",
+                                    style = NexusMonoTextStyles.metricSmall,
+                                    color = colors.ok
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            ProportionalStorageBar(
+                                totalBytes = storage.totalBytes,
+                                appsBytes = storage.appsAndSystemBytes,
+                                photosBytes = storage.photosBytes,
+                                videosBytes = storage.videosBytes,
+                                cleanableBytes = totalSelectedBytes.coerceAtLeast(cleanReport.totalCleanableBytes)
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                StorageLegendDot(
+                                    color = colors.accent,
+                                    label = if (uiState.isLoading) "Apps/Sist. —" else "Apps/Sist. ${NexusFormatters.formatBytes(storage.appsAndSystemBytes)}"
+                                )
+                                StorageLegendDot(
+                                    color = colors.accent2,
+                                    label = if (uiState.isLoading) "Fotos —" else "Fotos ${NexusFormatters.formatBytes(storage.photosBytes)}"
+                                )
+                                StorageLegendDot(
+                                    color = colors.ok,
+                                    label = if (uiState.isLoading) "Vídeos —" else "Vídeos ${NexusFormatters.formatBytes(storage.videosBytes)}"
+                                )
+                                StorageLegendDot(
+                                    color = colors.warn,
+                                    label = "Libertável ${NexusFormatters.formatBytes(cleanReport.totalCleanableBytes)}"
+                                )
+                                StorageLegendDot(
+                                    color = colors.textMuted,
+                                    label = if (uiState.isLoading) "Livre —" else "Livre ${NexusFormatters.formatBytes(storage.freeBytes)}"
                                 )
                             }
                         }
+
+                        // Se ainda não tiver permissão de leitura de media, mostra explicação clara e botão
+                        if (!cleanReport.hasMediaPermission) {
+                            NexusCard(
+                                backgroundColor = colors.surfaceAlt,
+                                borderColor = colors.accent,
+                                contentPadding = PaddingValues(14.dp)
+                            ) {
+                                Text(
+                                    text = "Permissão necessária para analisar ficheiros",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = colors.text
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Para encontrar duplicados reais (SHA-256), fotos semelhantes (dHash), capturas antigas e ficheiros grandes com pré-visualização, autoriza o acesso aos ficheiros multimédia.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colors.textDim
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                NexusPrimaryGradientButton(
+                                    text = "Permitir leitura de ficheiros",
+                                    onClick = {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            mediaPermissionLauncher.launch(
+                                                arrayOf(
+                                                    Manifest.permission.READ_MEDIA_IMAGES,
+                                                    Manifest.permission.READ_MEDIA_VIDEO,
+                                                    Manifest.permission.READ_MEDIA_AUDIO
+                                                )
+                                            )
+                                        } else {
+                                            mediaPermissionLauncher.launch(
+                                                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+
+                        val displayCategories = if (cleanReport.categories.isNotEmpty()) {
+                            cleanReport.categories
+                        } else {
+                            CleanCategoryType.entries
+                                .filter { !it.requiresFullFlavorManageStorage || BuildConfig.IS_FULL_FLAVOR }
+                                .map {
+                                    CleanCategoryGroup(
+                                        type = it,
+                                        subtitlePt = it.emptySubtitlePt,
+                                        files = persistentListOf(),
+                                        totalSizeBytes = 0L
+                                    )
+                                }
+                        }
+
+                        val safeCategories = displayCategories.filter { it.type.isSafePreselected }
+                        val reviewCategories = displayCategories.filter { !it.type.isSafePreselected }
+
+                        Text(
+                            text = "Limpeza segura (pré-selecionada)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.ok
+                        )
+                        safeCategories.forEach { group ->
+                            val isSelected = group.type in selectedCategories
+                            CleanCategoryRealRow(
+                                group = group,
+                                isSelected = isSelected,
+                                isScanning = false,
+                                sharedTransitionScope = this@SharedTransitionLayout,
+                                animatedVisibilityScope = this@AnimatedContent,
+                                onToggleSelect = {
+                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                    if (isSelected) {
+                                        selectedCategories.remove(group.type)
+                                    } else {
+                                        selectedCategories.add(group.type)
+                                    }
+                                },
+                                onOpenPreview = { previewCategory = group }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Requer revisão manual (desmarcada por omissão)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.warn
+                        )
+                        reviewCategories.forEach { group ->
+                            val isSelected = group.type in selectedCategories
+                            CleanCategoryRealRow(
+                                group = group,
+                                isSelected = isSelected,
+                                isScanning = false,
+                                sharedTransitionScope = this@SharedTransitionLayout,
+                                animatedVisibilityScope = this@AnimatedContent,
+                                onToggleSelect = {
+                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                    if (isSelected) {
+                                        selectedCategories.remove(group.type)
+                                    } else {
+                                        selectedCategories.add(group.type)
+                                        previewCategory = group
+                                    }
+                                },
+                                onOpenPreview = { previewCategory = group }
+                            )
+                        }
+
+                        // Opção avançada MANAGE_EXTERNAL_STORAGE (apenas no flavor Full se não concedida)
+                        if (BuildConfig.IS_FULL_FLAVOR &&
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                            !cleanReport.hasManageStoragePermission
+                        ) {
+                            NexusCard(
+                                backgroundColor = colors.surface,
+                                borderColor = colors.border,
+                                contentPadding = PaddingValues(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Modo avançado: Restos de apps, subpastas APK e Lixo Nexus",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                            color = colors.text
+                                        )
+                                        Text(
+                                            text = "Opcional: concede MANAGE_EXTERNAL_STORAGE para restos em Android/media e limpeza global de cache",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.textDim
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    NexusChip(
+                                        text = "Autorizar",
+                                        color = colors.accent2,
+                                        onClick = { NexusSystemIntents.openManageAllFilesSettings(context) }
+                                    )
+                                }
+                            }
+                        }
                     }
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        "Toca numa categoria para rever · Vai para o Lixo (restaurável durante 30 dias)"
-                    } else {
-                        "Atenção: abaixo do Android 11 (API 30) a remoção no MediaStore não é reversível"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) colors.textMuted else colors.warn,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
+
+                    // Barra fixa inferior «Limpar X» / «Mover para o Lixo · X»
+                    val animDuration = rememberScaledAnimationDuration(180)
+                    Surface(
+                        color = colors.bgRaised,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .shadow(elevation = 10.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 18.dp, vertical = 10.dp)
+                        ) {
+                            NexusPrimaryGradientButton(
+                                text = "Limpar $totalSelectedFormatted",
+                                enabled = selectedFilesToTrash.isNotEmpty() || selectedEmptyFolders.isNotEmpty(),
+                                onClick = {
+                                    val intentSender = buildTrashIntent(selectedFilesToTrash)
+                                    if (intentSender != null) {
+                                        pendingTrashFiles = selectedFilesToTrash
+                                        pendingEmptyFolders = selectedEmptyFolders
+                                        trashIntentLauncher.launch(
+                                            IntentSenderRequest.Builder(intentSender).build()
+                                        )
+                                    } else if (selectedFilesToTrash.isNotEmpty() || selectedEmptyFolders.isNotEmpty()) {
+                                        onTrashConfirmed(selectedFilesToTrash, selectedEmptyFolders)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                contentSlot = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                                "Limpar (Mover para o Lixo) · "
+                                            } else {
+                                                "Limpar · "
+                                            },
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = colors.onAccent
+                                        )
+                                        AnimatedContent(
+                                            targetState = totalSelectedFormatted,
+                                            transitionSpec = {
+                                                fadeIn(tween(animDuration)) togetherWith fadeOut(tween(animDuration))
+                                            },
+                                            label = "cleanTotalAnimated"
+                                        ) { formattedTotal ->
+                                            Text(
+                                                text = formattedTotal,
+                                                style = NexusMonoTextStyles.metricMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = colors.onAccent
+                                            )
+                                        }
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                    "Toca numa categoria para rever · Vai para o Lixo (restaurável durante 30 dias)"
+                                } else {
+                                    "Atenção: abaixo do Android 11 (API 30) a remoção no MediaStore não é reversível"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) colors.textMuted else colors.warn,
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -993,9 +1039,12 @@ private fun DeepCleanCompletionView(
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun CategoryReviewSheetContent(
     group: CleanCategoryGroup,
+    sharedTransitionScope: SharedTransitionScope,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedVisibilityScope,
     hasMediaPermission: Boolean,
     hasUsageStatsPermission: Boolean,
     hasManageStoragePermission: Boolean,
@@ -1015,33 +1064,62 @@ private fun CategoryReviewSheetContent(
 
     Column(
         modifier = Modifier
-            .fillMaxWidth()
+            .fillMaxSize()
             .padding(horizontal = 18.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Revisão · ${group.type.titlePt}",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = colors.text
-                )
-                Text(
-                    text = group.subtitlePt,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.textDim
-                )
-            }
-            if (group.files.isNotEmpty() && group.type != CleanCategoryType.SIMILAR_PHOTOS) {
-                NexusChip(
-                    text = if (useGridView) "Vista: Grelha" else "Vista: Lista",
-                    color = colors.accent2,
-                    onClick = { useGridView = !useGridView }
-                )
+        with(sharedTransitionScope) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .sharedElement(
+                        sharedContentState = rememberSharedContentState(key = "cat_header_${group.type.name}"),
+                        animatedVisibilityScope = animatedVisibilityScope
+                    ),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                    ) {
+                        Icon(
+                            imageVector = NexusIcons.ArrowBack,
+                            contentDescription = "Voltar",
+                            tint = colors.text
+                        )
+                    }
+                    Icon(
+                        imageVector = iconForCategory(group.type),
+                        contentDescription = null,
+                        tint = colors.accent2,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = group.type.titlePt,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = colors.text
+                        )
+                        Text(
+                            text = group.subtitlePt,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textDim
+                        )
+                    }
+                }
+                if (group.files.isNotEmpty() && group.type != CleanCategoryType.SIMILAR_PHOTOS) {
+                    NexusChip(
+                        text = if (useGridView) "Vista: Grelha" else "Vista: Lista",
+                        color = colors.accent2,
+                        onClick = { useGridView = !useGridView }
+                    )
+                }
             }
         }
 
@@ -1107,20 +1185,19 @@ private fun CategoryReviewSheetContent(
             }
             else -> {
                 if (group.files.isEmpty()) {
-                    Text(
-                        text = if (!hasMediaPermission) {
-                            "Permissão de leitura de ficheiros não concedida."
+                    NexusEmptyStateCard(
+                        title = if (!hasMediaPermission) "Permissão de ficheiros necessária" else "Tudo limpo nesta categoria",
+                        subtitle = if (!hasMediaPermission) {
+                            "Autoriza a leitura de ficheiros multimédia para analisar esta categoria."
                         } else {
-                            "Nenhum ficheiro encontrado nesta categoria."
+                            "Nenhum ficheiro encontrado em ${group.type.titlePt}."
                         },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.textMuted,
-                        modifier = Modifier.padding(vertical = 16.dp)
+                        icon = iconForCategory(group.type)
                     )
                 } else if (useGridView) {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
-                        modifier = Modifier.height(340.dp),
+                        modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -1543,11 +1620,14 @@ private fun ProportionalStorageBar(
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun CleanCategoryRealRow(
     group: CleanCategoryGroup,
     isSelected: Boolean,
     isScanning: Boolean,
+    sharedTransitionScope: SharedTransitionScope,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedVisibilityScope,
     onToggleSelect: () -> Unit,
     onOpenPreview: () -> Unit
 ) {
@@ -1558,50 +1638,71 @@ private fun CleanCategoryRealRow(
         else -> NexusFormatters.formatBytes(group.totalSizeBytes)
     }
 
-    NexusCard(
-        backgroundColor = colors.surface,
-        borderColor = if (isSelected) colors.accent.copy(alpha = 0.65f) else colors.border,
-        contentPadding = PaddingValues(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
-        onClick = onOpenPreview
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+    with(sharedTransitionScope) {
+        NexusCard(
+            modifier = Modifier.sharedElement(
+                sharedContentState = rememberSharedContentState(key = "cat_header_${group.type.name}"),
+                animatedVisibilityScope = animatedVisibilityScope
+            ),
+            backgroundColor = colors.surface,
+            borderColor = if (isSelected) colors.accent.copy(alpha = 0.65f) else colors.border,
+            contentPadding = PaddingValues(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+            onClick = onOpenPreview
         ) {
-            if (group.type == CleanCategoryType.APP_CACHE) {
-                Spacer(modifier = Modifier.width(12.dp))
-            } else {
-                NexusCheckbox48dp(
-                    checked = isSelected,
-                    onToggle = onToggleSelect
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-            }
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (group.type == CleanCategoryType.APP_CACHE) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                } else {
+                    NexusCheckbox48dp(
+                        checked = isSelected,
+                        onToggle = onToggleSelect
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(colors.surfaceAlt),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = iconForCategory(group.type),
+                        contentDescription = null,
+                        tint = if (isSelected) colors.accent2 else colors.textDim,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = group.type.titlePt,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.text
+                    )
+                    Text(
+                        text = group.subtitlePt,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textMuted
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = group.type.titlePt,
-                    style = MaterialTheme.typography.titleMedium,
+                    text = sizeText,
+                    style = NexusMonoTextStyles.metricSmall,
                     color = colors.text
                 )
-                Text(
-                    text = group.subtitlePt,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.textMuted
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = NexusIcons.ChevronRight,
+                    contentDescription = "Rever ${group.type.titlePt}",
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(20.dp)
                 )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = sizeText,
-                style = NexusMonoTextStyles.metricSmall,
-                color = colors.text
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Icon(
-                imageVector = NexusIcons.ChevronRight,
-                contentDescription = "Rever ${group.type.titlePt}",
-                tint = colors.textMuted,
-                modifier = Modifier.size(20.dp)
-            )
         }
     }
 }
