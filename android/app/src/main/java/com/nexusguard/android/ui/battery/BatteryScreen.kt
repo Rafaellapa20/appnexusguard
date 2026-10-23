@@ -131,29 +131,17 @@ fun BatteryScreen(
             )
         }
 
-        // Gráfico de amostras reais num único Canvas
+        // Gráfico de amostras reais num único Canvas (sem amostras sintéticas)
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border,
             contentPadding = PaddingValues(14.dp)
         ) {
-            val chartSamples = remember(uiState.batterySamples, bat.levelPercent, bat.isCharging, isLoading) {
+            val chartSamples = remember(uiState.batterySamples, isLoading) {
                 if (isLoading) {
                     persistentListOf()
                 } else {
-                    val ordered = uiState.batterySamples.reversed()
-                    if (ordered.isEmpty()) {
-                        persistentListOf(
-                            BatterySampleEntity(
-                                timestampEpochMillis = System.currentTimeMillis(),
-                                levelPercent = bat.levelPercent,
-                                temperatureCelsius = bat.temperatureCelsius ?: 30f,
-                                isCharging = bat.isCharging
-                            )
-                        )
-                    } else {
-                        ordered.toImmutableList()
-                    }
+                    uiState.batterySamples.reversed().toImmutableList()
                 }
             }
             Row(
@@ -166,13 +154,32 @@ fun BatteryScreen(
                     color = colors.textDim
                 )
                 Text(
-                    text = if (isLoading) "A ler..." else "nível % (atual ${bat.levelPercent}%)",
+                    text = when {
+                        isLoading -> "A ler..."
+                        chartSamples.isEmpty() -> "a recolher amostras"
+                        else -> "nível % (atual ${bat.levelPercent}%)"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textMuted
                 )
             }
             Spacer(modifier = Modifier.height(12.dp))
-            Battery24hCanvasChart(samples = chartSamples)
+            if (!isLoading && chartSamples.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(96.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "a recolher amostras",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textMuted
+                    )
+                }
+            } else {
+                Battery24hCanvasChart(samples = chartSamples)
+            }
         }
 
         NexusCard(
@@ -227,7 +234,7 @@ fun BatteryScreen(
                     Text(
                         text = when {
                             isLoading -> "A verificar atividade de apps..."
-                            !uiState.hasUsageStatsPermission -> "UsageStats opcional: ver apps instaladas e consumo"
+                            !uiState.hasUsageStatsPermission -> "Requer acesso a utilização"
                             else -> "${uiState.highBackgroundAppsCount} app(s) ativas · ${uiState.unusedAppsCount} sem uso (>30d)"
                         },
                         style = MaterialTheme.typography.bodySmall,

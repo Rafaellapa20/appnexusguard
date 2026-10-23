@@ -145,10 +145,14 @@ fun HomeScreen(
         ThermalLevelPt.GRAVE, ThermalLevelPt.CRITICO -> colors.danger
     }
 
-    val unusedValueText = if (isLoading) "—" else uiState.unusedAppsCount.toString()
+    val unusedValueText = when {
+        isLoading -> "—"
+        !uiState.hasUsageStatsPermission -> "—"
+        else -> uiState.unusedAppsCount.toString()
+    }
     val unusedSubtitleText = when {
         isLoading -> "A ler apps..."
-        !uiState.hasUsageStatsPermission -> "Sem UsageStats (${uiState.installedAppsCount} apps)"
+        !uiState.hasUsageStatsPermission -> "Requer acesso a utilização"
         else -> "> 30 dias (${uiState.installedAppsCount} apps)"
     }
     val analysisState = uiState.analysisState

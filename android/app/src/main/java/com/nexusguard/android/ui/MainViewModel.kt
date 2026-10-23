@@ -290,12 +290,12 @@ class MainViewModel @Inject constructor(
 
             val fixes = mutableListOf<ProposedFixItem>()
 
-            if (BuildConfig.IS_FULL_FLAVOR && snapshot.installedApps.isNotEmpty()) {
+            if (BuildConfig.IS_FULL_FLAVOR && snapshot.hasUsageStatsPermission && snapshot.installedApps.isNotEmpty()) {
                 fixes.add(
                     ProposedFixItem(
                         id = "bg_processes",
-                        title = "Terminar processos em segundo plano permitidos",
-                        subtitle = "Executa killBackgroundProcesses nas apps em fundo (exclui últimos 60 s)",
+                        title = "Libertar processos de apps em segundo plano",
+                        subtitle = "Apenas apps ativas nas últimas 3 h e sem uso há > 30 min (o sistema pode reiniciá-las)",
                         requiresSystemConfirmation = false,
                         actionRouteOrType = "AUTO_BG"
                     )
@@ -377,9 +377,9 @@ class MainViewModel @Inject constructor(
             _analysisState.value = _analysisState.value.copy(
                 proposedFixes = updated,
                 statusMessage = if (stopped > 0) {
-                    "Corrigido automaticamente: $stopped processo(s) em fundo terminado(s). As restantes ações requerem confirmação."
+                    "Pedido ao Android para libertar processos de $stopped apps (o sistema pode reiniciá-los)."
                 } else {
-                    "Ações automáticas aplicadas. As ações que exigem confirmação têm atalho direto abaixo."
+                    "Nenhuma app candidata em fundo para libertar. As restantes ações têm atalho direto abaixo."
                 }
             )
         }

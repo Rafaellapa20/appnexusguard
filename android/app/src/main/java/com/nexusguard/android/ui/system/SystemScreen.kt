@@ -125,12 +125,28 @@ fun SystemScreen(
                             color = colors.accent2,
                             onClick = {
                                 onStopPermittedBackground { count ->
-                                    Toast.makeText(
-                                        context,
-                                        "killBackgroundProcesses executado em $count apps em fundo.",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    val msg = if (count > 0) {
+                                        "Pedido ao Android para libertar processos de $count apps (o sistema pode reiniciá-los)"
+                                    } else if (!uiState.hasUsageStatsPermission) {
+                                        "Requer acesso a utilização para identificar apps ativas em fundo."
+                                    } else {
+                                        "Nenhuma app candidata em segundo plano encontrada."
+                                    }
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                 }
+                            }
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        NexusChip(
+                            text = "Restringir em fundo",
+                            color = colors.warn,
+                            onClick = {
+                                Toast.makeText(
+                                    context,
+                                    "Seleciona «Restringir em fundo» numa app abaixo para abrir as definições do sistema.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         )
                     }
@@ -223,13 +239,18 @@ fun SystemScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            val usageNote = if (uiState.hasUsageStatsPermission) {
+                            val sizeLabel = if (app.isSizeEstimatedApk) {
+                                "${NexusFormatters.formatBytes(app.totalSizeBytes)} · estimado (APK)"
+                            } else {
+                                NexusFormatters.formatBytes(app.totalSizeBytes)
+                            }
+                            val usageNote = if (uiState.hasUsageStatsPermission && app.daysSinceUse != null) {
                                 if (app.isUnused30Days) "Sem uso há ${app.daysSinceUse} d" else "Usada há ${app.daysSinceUse} d"
                             } else {
-                                app.packageName
+                                "Requer acesso a utilização"
                             }
                             Text(
-                                text = "${NexusFormatters.formatBytes(app.totalSizeBytes)} · $usageNote",
+                                text = "$sizeLabel · $usageNote",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (app.isUnused30Days) colors.warn else colors.textMuted,
                                 maxLines = 1,
@@ -244,7 +265,7 @@ fun SystemScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     NexusTextButton(
-                        text = "Parar / Bateria",
+                        text = "Restringir em fundo",
                         color = colors.accent2,
                         onClick = {
                             NexusSystemIntents.openAppDetailsSettings(context, app.packageName)

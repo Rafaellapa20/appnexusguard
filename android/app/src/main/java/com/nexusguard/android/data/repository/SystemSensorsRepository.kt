@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
@@ -18,12 +19,15 @@ import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
 import android.os.storage.StorageManager
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import com.nexusguard.android.BuildConfig
 import com.nexusguard.android.data.local.BatterySampleEntity
 import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
+import com.nexusguard.android.domain.BackgroundAppCandidateInput
+import com.nexusguard.android.domain.BackgroundProcessCandidateSelector
 import com.nexusguard.android.domain.HealthScoreCalculator
 import com.nexusguard.android.domain.SystemHealthInputs
 import com.nexusguard.android.domain.ThermalLevelPt
@@ -96,11 +100,14 @@ data class InstalledAppUsageInfo(
     val appName: String,
     val monogram: String,
     val isGame: Boolean,
-    val lastTimeUsedMillis: Long,
-    val foregroundTimeMillis: Long,
-    val daysSinceUse: Int,
+    val lastTimeUsedMillis: Long?,
+    val foregroundTimeMillis: Long?,
+    val daysSinceUse: Int?,
     val totalSizeBytes: Long,
-    val isUnused30Days: Boolean
+    val cacheBytes: Long = 0L,
+    val isSizeEstimatedApk: Boolean = false,
+    val isUnused30Days: Boolean = false,
+    val hasForegroundService24h: Boolean = false
 )
 
 @Immutable
@@ -155,8 +162,14 @@ class SystemSensorsRepository @Inject constructor(
     private var lastSampleSavedMillis = 0L
     private var lastSlowRefreshMillis = 0L
 
-    // Cache em memória dos tamanhos das apps com chave "packageName:lastUpdateTime"
-    private val appSizeCache = ConcurrentHashMap<String, Long>()
+    private data class CachedAppSize(
+        val totalBytes: Long,
+        val cacheBytes: Long,
+        val isEstimatedApk: Boolean
+    )
+
+    // Cache em memória dos tamanhos das apps com chave "packageName:lastUpdateTime:hasUsagePermission"
+    private val appSizeCache = ConcurrentHashMap<String, CachedAppSize>()
 
     private val _storageState = MutableStateFlow(LiveStorageMetrics(0, 0, 0, 0, 0, 0, 0, false))
     val storageFlow: StateFlow<LiveStorageMetrics> = _storageState
@@ -276,7 +289,7 @@ class SystemSensorsRepository @Inject constructor(
     ) { battery, thermal, memory, storage, appsState ->
         val (availRam, totalRam) = memory
         val unusedAppsCount = appsState.apps.count { it.isUnused30Days }
-        val activeBgCount = appsState.apps.count { it.foregroundTimeMillis > 15 * 60_000L }
+        val activeBgCount = appsState.apps.count { (it.foregroundTimeMillis ?: 0L) > 15 * 60_000L }
 
         val score = HealthScoreCalculator.calculateScore(
             SystemHealthInputs(
@@ -377,7 +390,7 @@ class SystemSensorsRepository @Inject constructor(
         val storage = _storageState.value
         val appsState = _appsState.value
         val unusedAppsCount = appsState.apps.count { it.isUnused30Days }
-        val activeBgCount = appsState.apps.count { it.foregroundTimeMillis > 15 * 60_000L }
+        val activeBgCount = appsState.apps.count { (it.foregroundTimeMillis ?: 0L) > 15 * 60_000L }
 
         val score = HealthScoreCalculator.calculateScore(
             SystemHealthInputs(
@@ -738,7 +751,11 @@ class SystemSensorsRepository @Inject constructor(
 
             val stats = usageMap[appInfo.packageName]
             val lastUsed = stats?.lastTimeUsed ?: 0L
-            val fgTime = stats?.totalTimeInForeground ?: 0L
+            val fgTime: Long? = if (hasUsagePermission) {
+                stats?.totalTimeInForeground ?: 0L
+            } else {
+                null
+            }
 
             val pkgInfo = try {
                 pm.getPackageInfo(appInfo.packageName, 0)
@@ -748,35 +765,24 @@ class SystemSensorsRepository @Inject constructor(
             val firstInstall = pkgInfo?.firstInstallTime ?: now
             val lastUpdate = pkgInfo?.lastUpdateTime ?: firstInstall
             val packageTimestamp = maxOf(firstInstall, lastUpdate)
-            val isStopped = (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
 
-            val referenceTime = if (lastUsed > 0L) lastUsed else packageTimestamp
-            val daysSinceUse = ((now - referenceTime).coerceAtLeast(0L) / (24L * 3600_000L)).toInt()
-            val isUnused30Days = if (hasUsagePermission) {
+            val referenceTime: Long? = if (hasUsagePermission) {
+                if (lastUsed > 0L) lastUsed else packageTimestamp
+            } else {
+                null
+            }
+            val daysSinceUse: Int? = referenceTime?.let {
+                ((now - it).coerceAtLeast(0L) / (24L * 3600_000L)).toInt()
+            }
+            val isUnused30Days = if (hasUsagePermission && referenceTime != null) {
                 referenceTime < thirtyDaysAgo
             } else {
-                referenceTime < thirtyDaysAgo || (isStopped && daysSinceUse >= 14)
+                false
             }
 
             // Chave em cache: packageName + lastUpdateTime + permissão UsageStats
             val cacheKey = "${appInfo.packageName}:${lastUpdate}:${hasUsagePermission}"
-            val sizeBytes = appSizeCache.getOrPut(cacheKey) {
-                val apkAndSplitsBytes = buildList {
-                    appInfo.sourceDir?.let { add(File(it)) }
-                    appInfo.splitSourceDirs?.forEach { add(File(it)) }
-                }.sumOf { file -> if (file.exists()) file.length() else 0L }
-
-                val nativeLibsBytes = appInfo.nativeLibraryDir?.let { dirPath ->
-                    val dir = File(dirPath)
-                    if (dir.exists() && dir.isDirectory) {
-                        dir.listFiles()?.sumOf { it.length() } ?: 0L
-                    } else {
-                        0L
-                    }
-                } ?: 0L
-
-                val fallbackAppBytes = apkAndSplitsBytes + nativeLibsBytes
-
+            val sizeEntry = appSizeCache.getOrPut(cacheKey) {
                 if (hasUsagePermission && storageStatsManager != null) {
                     try {
                         val st = storageStatsManager.queryStatsForPackage(
@@ -784,21 +790,27 @@ class SystemSensorsRepository @Inject constructor(
                             appInfo.packageName,
                             userHandle
                         )
-                        (st.appBytes + st.dataBytes + st.cacheBytes).coerceAtLeast(fallbackAppBytes)
+                        CachedAppSize(
+                            totalBytes = st.appBytes + st.dataBytes + st.cacheBytes,
+                            cacheBytes = st.cacheBytes,
+                            isEstimatedApk = false
+                        )
                     } catch (_: Exception) {
-                        fallbackAppBytes
+                        val apkBytes = computeEstimatedApkBytes(appInfo)
+                        CachedAppSize(
+                            totalBytes = apkBytes,
+                            cacheBytes = 0L,
+                            isEstimatedApk = true
+                        )
                     }
                 } else {
-                    fallbackAppBytes
+                    val apkBytes = computeEstimatedApkBytes(appInfo)
+                    CachedAppSize(
+                        totalBytes = apkBytes,
+                        cacheBytes = 0L,
+                        isEstimatedApk = true
+                    )
                 }
-            }
-
-            val effectiveFgMillis = if (hasUsagePermission) {
-                fgTime
-            } else if (!isStopped) {
-                30 * 60_000L
-            } else {
-                0L
             }
 
             InstalledAppUsageInfo(
@@ -807,9 +819,11 @@ class SystemSensorsRepository @Inject constructor(
                 monogram = monogram,
                 isGame = isGame,
                 lastTimeUsedMillis = referenceTime,
-                foregroundTimeMillis = effectiveFgMillis,
+                foregroundTimeMillis = fgTime,
                 daysSinceUse = daysSinceUse,
-                totalSizeBytes = sizeBytes,
+                totalSizeBytes = sizeEntry.totalBytes,
+                cacheBytes = sizeEntry.cacheBytes,
+                isSizeEstimatedApk = sizeEntry.isEstimatedApk,
                 isUnused30Days = isUnused30Days
             )
         }.sortedWith(
@@ -818,73 +832,148 @@ class SystemSensorsRepository @Inject constructor(
         ).toImmutableList()
     }
 
+    private fun computeEstimatedApkBytes(appInfo: ApplicationInfo): Long {
+        val apkAndSplitsBytes = buildList {
+            appInfo.sourceDir?.let { add(File(it)) }
+            appInfo.splitSourceDirs?.forEach { add(File(it)) }
+        }.sumOf { file -> if (file.exists()) file.length() else 0L }
+
+        val nativeLibsBytes = appInfo.nativeLibraryDir?.let { dirPath ->
+            val dir = File(dirPath)
+            if (dir.exists() && dir.isDirectory) {
+                dir.listFiles()?.sumOf { it.length() } ?: 0L
+            } else {
+                0L
+            }
+        } ?: 0L
+
+        return apkAndSplitsBytes + nativeLibsBytes
+    }
+
     /**
-     * Para processos em fundo permitidos pelo Android (apenas no flavor 'full' com KILL_BACKGROUND_PROCESSES):
-     * - Não volta a ler o snapshot completo (usa a lista atual em memória);
-     * - Usa UsageStatsManager.queryEvents para excluir a app em primeiro plano e todas as usadas nos últimos 60 s;
-     * - Não limita às 12 maiores;
-     * - Regista no Histórico exatamente o que foi feito.
+     * Fase 0: Seleciona e pede ao Android para libertar processos apenas de candidatas reais:
+     * - Apps com eventos FOREGROUND_SERVICE_START sem FOREGROUND_SERVICE_STOP ou atividade nas últimas 3 h;
+     * - Sem uso em primeiro plano há mais de 30 min;
+     * - Excluindo a própria app, teclado, launcher, apps do sistema e apps de música/navegação ativas;
+     * - Regista no Histórico: «Pedido ao Android para libertar processos de N apps (o sistema pode reiniciá-los)».
      */
     suspend fun stopPermittedBackgroundApps(recordInHistory: Boolean = true): Int = withContext(Dispatchers.IO) {
         if (!BuildConfig.IS_FULL_FLAVOR) return@withContext 0
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        if (!hasUsageStatsPermission()) return@withContext 0
 
-        val currentApps = _appsState.value.apps.ifEmpty {
-            readInstalledAppsUsage(hasUsageStatsPermission())
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val pm = context.packageManager
+        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val isMusicPlaying = audioManager?.isMusicActive == true
+
+        val imePackages = try {
+            imm?.enabledInputMethodList?.map { it.packageName }?.toSet() ?: emptySet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+
+        val launcherPackages = try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            pm.queryIntentActivities(homeIntent, 0).mapNotNull { it.activityInfo?.packageName }.toSet()
+        } catch (_: Exception) {
+            emptySet()
         }
 
         val now = System.currentTimeMillis()
-        val recentActivePackages = mutableSetOf<String>()
-        recentActivePackages.add(context.packageName)
+        val threeHoursAgo = now - (3L * 3600_000L)
 
-        if (hasUsageStatsPermission()) {
-            try {
-                val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-                val events = usm.queryEvents(now - 60_000L, now)
-                val event = UsageEvents.Event()
-                while (events.hasNextEvent()) {
-                    events.getNextEvent(event)
-                    if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                        event.eventType == UsageEvents.Event.ACTIVITY_PAUSED ||
-                        event.eventType == UsageEvents.Event.USER_INTERACTION
-                    ) {
-                        event.packageName?.let { recentActivePackages.add(it) }
+        val fgsStartMap = mutableMapOf<String, Long>()
+        val fgsStopMap = mutableMapOf<String, Long>()
+        val lastFgResumeMap = mutableMapOf<String, Long>()
+        val activeIn3hSet = mutableSetOf<String>()
+
+        try {
+            val events = usm.queryEvents(threeHoursAgo, now)
+            val event = UsageEvents.Event()
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                val pkg = event.packageName ?: continue
+                activeIn3hSet.add(pkg)
+                when (event.eventType) {
+                    UsageEvents.Event.ACTIVITY_RESUMED -> {
+                        val prev = lastFgResumeMap[pkg] ?: 0L
+                        if (event.timeStamp > prev) lastFgResumeMap[pkg] = event.timeStamp
+                    }
+                    UsageEvents.Event.FOREGROUND_SERVICE_START -> {
+                        val prev = fgsStartMap[pkg] ?: 0L
+                        if (event.timeStamp > prev) fgsStartMap[pkg] = event.timeStamp
+                    }
+                    UsageEvents.Event.FOREGROUND_SERVICE_STOP -> {
+                        val prev = fgsStopMap[pkg] ?: 0L
+                        if (event.timeStamp > prev) fgsStopMap[pkg] = event.timeStamp
                     }
                 }
-            } catch (_: Exception) {
             }
+        } catch (_: Exception) {
+            return@withContext 0
         }
 
-        val candidates = currentApps.filter { app ->
-            app.packageName !in recentActivePackages
+        val installedMap = try {
+            pm.getInstalledApplications(0).associateBy { it.packageName }
+        } catch (_: Exception) {
+            emptyMap()
         }
 
-        var stoppedCount = 0
-        for (app in candidates) {
-            try {
-                am.killBackgroundProcesses(app.packageName)
-                stoppedCount++
-            } catch (_: Exception) {
-            }
-        }
+        val candidateInputs = activeIn3hSet.mapNotNull { pkg ->
+            val appInfo = installedMap[pkg] ?: return@mapNotNull null
+            val isPureSystemApp = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+            val lastFgsStart = fgsStartMap[pkg] ?: 0L
+            val lastFgsStop = fgsStopMap[pkg] ?: 0L
+            val hasUnstoppedFgs = lastFgsStart > 0L && lastFgsStart > lastFgsStop
 
-        if (recordInHistory && stoppedCount > 0) {
-            val detailMsg = if (hasUsageStatsPermission()) {
-                "killBackgroundProcesses solicitado ao Android para $stoppedCount app(s) em fundo (excluindo a app em primeiro plano e as ${recentActivePackages.size - 1} usada(s) nos últimos 60 s)."
+            val isMusicOrNavCategory = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appInfo.category == ApplicationInfo.CATEGORY_AUDIO ||
+                    appInfo.category == ApplicationInfo.CATEGORY_MAPS
             } else {
-                "killBackgroundProcesses solicitado ao Android para $stoppedCount app(s) instaladas que já se encontravam em segundo plano."
+                false
+            } || pkg.contains("maps", ignoreCase = true) || pkg.contains("waze", ignoreCase = true) || pkg.contains("spotify", ignoreCase = true) || pkg.contains("music", ignoreCase = true)
+            val isActiveMusicOrNav = hasUnstoppedFgs && (isMusicOrNavCategory || isMusicPlaying)
+
+            BackgroundAppCandidateInput(
+                packageName = pkg,
+                hasUnstoppedForegroundService = hasUnstoppedFgs,
+                hasActivityInLast3Hours = true,
+                lastForegroundResumeMillis = lastFgResumeMap[pkg] ?: 0L,
+                isSelfApp = pkg == context.packageName,
+                isImeKeyboard = pkg in imePackages,
+                isLauncher = pkg in launcherPackages,
+                isSystemApp = isPureSystemApp,
+                isActiveMusicOrNavApp = isActiveMusicOrNav
+            )
+        }
+
+        val targetPackages = BackgroundProcessCandidateSelector.selectCandidates(candidateInputs, now)
+
+        var requestedCount = 0
+        for (pkg in targetPackages) {
+            try {
+                am.killBackgroundProcesses(pkg)
+                requestedCount++
+            } catch (_: Exception) {
             }
+        }
+
+        if (recordInHistory && requestedCount > 0) {
+            val historyMessage = "Pedido ao Android para libertar processos de $requestedCount apps (o sistema pode reiniciá-los)"
             dao.insertHistory(
                 HistoryEntity(
                     actionType = "BACKGROUND_STOP",
-                    title = "Processos em fundo terminados ($stoppedCount apps)",
-                    details = detailMsg,
+                    title = historyMessage,
+                    details = historyMessage,
                     timestampEpochMillis = now,
                     bytesFreed = 0L,
                     canRestore = false
                 )
             )
         }
-        stoppedCount
+        requestedCount
     }
 }
