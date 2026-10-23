@@ -43,6 +43,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.nexusguard.android.ui.apps.AppsImpactScreen
 import com.nexusguard.android.ui.battery.BatteryScreen
 import com.nexusguard.android.ui.clean.CleanScreen
 import com.nexusguard.android.ui.components.NexusTopBar
@@ -297,6 +298,18 @@ fun NexusGuardMainScreen(
                     onDismissCompletion = viewModel::dismissCompletionScreen,
                     buildRestoreCompletionIntent = viewModel::buildRestoreFromCompletionIntentSender,
                     onRestoreConfirmed = viewModel::onRestoreConfirmed
+                )
+            }
+            composable(NexusTab.APPS.route) {
+                val appsImpactUiState by viewModel.appsImpactUiState.collectAsStateWithLifecycle()
+                LaunchedEffect(Unit) {
+                    viewModel.onEnterAppsImpactTab()
+                }
+                AppsImpactScreen(
+                    uiState = appsImpactUiState,
+                    onSelectPeriod = viewModel::selectAppsImpactPeriod,
+                    onRefresh = { viewModel.refreshAppsImpact(saveStorageSnapshots = true) },
+                    onBatchUninstallFinished = viewModel::onBatchUninstallFinished
                 )
             }
             composable(NexusTab.GAMES.route) {

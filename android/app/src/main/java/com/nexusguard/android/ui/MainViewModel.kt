@@ -11,6 +11,7 @@ import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.local.NexusGuardDao
 import com.nexusguard.android.data.preferences.UserPreferencesRepository
 import com.nexusguard.android.data.preferences.UserPreferencesState
+import com.nexusguard.android.data.repository.AppImpactRepository
 import com.nexusguard.android.data.repository.AppUpdateUiState
 import com.nexusguard.android.data.repository.AppUpdaterRepository
 import com.nexusguard.android.data.repository.BatteryProfileManager
@@ -19,6 +20,8 @@ import com.nexusguard.android.data.repository.CleanerRepository
 import com.nexusguard.android.data.repository.DeepCleanCompletionResult
 import com.nexusguard.android.data.repository.RealSystemSnapshot
 import com.nexusguard.android.data.repository.SystemSensorsRepository
+import com.nexusguard.android.domain.AppImpactItem
+import com.nexusguard.android.domain.AppImpactPeriod
 import com.nexusguard.android.domain.NexusFormatters
 import com.nexusguard.android.domain.ScannedFileCandidate
 import com.nexusguard.android.domain.ThermalLevelPt
@@ -49,6 +52,7 @@ class MainViewModel @Inject constructor(
     private val preferencesRepository: UserPreferencesRepository,
     private val sensorsRepository: SystemSensorsRepository,
     private val cleanerRepository: CleanerRepository,
+    private val appImpactRepository: AppImpactRepository,
     private val batteryProfileManager: BatteryProfileManager,
     private val boostManager: GameBoostManager,
     private val appUpdaterRepository: AppUpdaterRepository,
@@ -187,6 +191,9 @@ class MainViewModel @Inject constructor(
         initialValue = SystemUiState(isLoading = true)
     )
 
+    private val _appsImpactUiState = MutableStateFlow(AppsImpactUiState(isLoading = true))
+    val appsImpactUiState: StateFlow<AppsImpactUiState> = _appsImpactUiState.asStateFlow()
+
     init {
         viewModelScope.launch {
             SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(appContext, true)
@@ -249,6 +256,51 @@ class MainViewModel @Inject constructor(
      */
     fun onEnterCleanTab() {
         refreshCleanScan(force = false)
+    }
+
+    fun onEnterAppsImpactTab() {
+        if (_appsImpactUiState.value.apps.isEmpty()) {
+            refreshAppsImpact(period = _appsImpactUiState.value.selectedPeriod, saveStorageSnapshots = true)
+        }
+    }
+
+    fun selectAppsImpactPeriod(period: AppImpactPeriod) {
+        refreshAppsImpact(period = period, saveStorageSnapshots = false)
+    }
+
+    fun refreshAppsImpact(
+        period: AppImpactPeriod = _appsImpactUiState.value.selectedPeriod,
+        saveStorageSnapshots: Boolean = true
+    ) {
+        viewModelScope.launch {
+            _appsImpactUiState.value = _appsImpactUiState.value.copy(
+                isLoading = true,
+                selectedPeriod = period,
+                hasUsageStatsPermission = appImpactRepository.hasUsageStatsPermission()
+            )
+            val loaded = appImpactRepository.loadAppsImpact(
+                period = period,
+                saveStorageSnapshotsToRoom = saveStorageSnapshots
+            )
+            _appsImpactUiState.value = AppsImpactUiState(
+                isLoading = false,
+                selectedPeriod = period,
+                hasUsageStatsPermission = appImpactRepository.hasUsageStatsPermission(),
+                apps = loaded
+            )
+        }
+    }
+
+    fun onBatchUninstallFinished(
+        requestedApps: List<AppImpactItem>,
+        onResult: (Int, Long) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val (removedCount, freedBytes) = appImpactRepository.recordVerifiedBatchUninstalls(requestedApps)
+            onResult(removedCount, freedBytes)
+            refreshAppsImpact(saveStorageSnapshots = true)
+            sensorsRepository.refreshSlowMetrics(force = true)
+        }
     }
 
     fun requestOpenDeepCleanFromShortcut() {

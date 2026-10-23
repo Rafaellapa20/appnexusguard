@@ -65,4 +65,10 @@ interface NexusGuardDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChargingSession(session: ChargingSessionEntity)
+
+    @Query("SELECT * FROM app_storage_snapshots")
+    suspend fun getAllAppStorageSnapshots(): List<AppStorageSnapshotEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAppStorageSnapshots(snapshots: List<AppStorageSnapshotEntity>)
 }

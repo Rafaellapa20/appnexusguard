@@ -13,6 +13,8 @@ import com.nexusguard.android.data.repository.LiveStorageMetrics
 import com.nexusguard.android.data.repository.LiveThermalMetrics
 import com.nexusguard.android.data.repository.RealSystemSnapshot
 import com.nexusguard.android.data.repository.ScanProgress
+import com.nexusguard.android.domain.AppImpactItem
+import com.nexusguard.android.domain.AppImpactPeriod
 import com.nexusguard.android.domain.BatteryRateCalculator
 import com.nexusguard.android.domain.MeasuredBatteryConsumption
 import com.nexusguard.android.domain.ThermalLevelPt
@@ -155,6 +157,14 @@ data class SystemUiState(
     val totalRamBytes: Long = 0L,
     val hasUsageStatsPermission: Boolean = false,
     val installedApps: ImmutableList<InstalledAppUsageInfo> = persistentListOf()
+)
+
+@Immutable
+data class AppsImpactUiState(
+    val isLoading: Boolean = true,
+    val selectedPeriod: AppImpactPeriod = AppImpactPeriod.HOURS_24,
+    val hasUsageStatsPermission: Boolean = false,
+    val apps: ImmutableList<AppImpactItem> = persistentListOf()
 )
 
 object ScreenUiStateMappers {

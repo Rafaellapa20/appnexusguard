@@ -484,4 +484,47 @@ class DomainCalculatorsTest {
         val selected = BackgroundProcessCandidateSelector.selectCandidates(inputs, now)
         assertEquals(listOf("com.candidate.fgs"), selected)
     }
+
+    @Test
+    fun `app impact calculator formats battery reason filters unused apps and verifies batch uninstall`() {
+        val reason = AppImpactCalculator.buildBatteryReasonTextPt(
+            foregroundMillis = 15 * 60_000L,
+            backgroundServiceMillis = (2 * 60 + 14) * 60_000L,
+            wakeupsCount = 8
+        )
+        assertEquals("2 h 14 min em fundo com serviço ativo · 15 min em ecrã · 8 ativações", reason)
+        assertEquals("3 de 7", AppImpactCalculator.formatBatchStepProgressPt(3, 7))
+
+        val app35d = AppImpactItem(
+            packageName = "com.unused.35",
+            appName = "Unused 35",
+            monogram = "U3",
+            uid = 1001,
+            isSystemApp = false,
+            canBeDisabledBloatware = false,
+            totalStorageBytes = 100_000_000L,
+            daysSinceLastUse = 35
+        )
+        val app95d = app35d.copy(
+            packageName = "com.unused.95",
+            appName = "Unused 95",
+            totalStorageBytes = 250_000_000L,
+            daysSinceLastUse = 95
+        )
+        val systemUnused = app95d.copy(packageName = "com.android.sys", isSystemApp = true)
+
+        val unused30 = AppImpactCalculator.filterUnusedApps(listOf(app35d, app95d, systemUnused), 30)
+        val unused90 = AppImpactCalculator.filterUnusedApps(listOf(app35d, app95d, systemUnused), 90)
+        assertEquals(listOf("com.unused.95", "com.unused.35"), unused30.map { it.packageName })
+        assertEquals(listOf("com.unused.95"), unused90.map { it.packageName })
+
+        // Simula que apenas com.unused.95 foi realmente desinstalado pelo utilizador
+        val (removed, freedBytes) = AppImpactCalculator.verifyBatchUninstallResult(
+            requestedApps = listOf(app35d, app95d),
+            isStillInstalled = { pkg -> pkg == "com.unused.35" }
+        )
+        assertEquals(1, removed.size)
+        assertEquals("com.unused.95", removed.first().packageName)
+        assertEquals(250_000_000L, freedBytes)
+    }
 }

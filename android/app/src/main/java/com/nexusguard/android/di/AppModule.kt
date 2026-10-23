@@ -38,7 +38,11 @@ object AppModule {
             context,
             NexusGuardDatabase::class.java,
             "nexus_guard_history.db"
-        ).addMigrations(NexusGuardDatabase.MIGRATION_1_2, NexusGuardDatabase.MIGRATION_2_3)
+        ).addMigrations(
+            NexusGuardDatabase.MIGRATION_1_2,
+            NexusGuardDatabase.MIGRATION_2_3,
+            NexusGuardDatabase.MIGRATION_3_4
+        )
             .fallbackToDestructiveMigration(true)
             .build()
     }

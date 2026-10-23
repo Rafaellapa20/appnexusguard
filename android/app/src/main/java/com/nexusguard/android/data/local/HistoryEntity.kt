@@ -71,3 +71,15 @@ data class ChargingSessionEntity(
     val endPercent: Int,
     val maxTempCelsius: Float
 )
+
+@Immutable
+@Entity(tableName = "app_storage_snapshots")
+data class AppStorageSnapshotEntity(
+    @PrimaryKey
+    val packageName: String,
+    val totalBytes: Long,
+    val appBytes: Long,
+    val dataBytes: Long,
+    val cacheBytes: Long,
+    val timestampEpochMillis: Long
+)

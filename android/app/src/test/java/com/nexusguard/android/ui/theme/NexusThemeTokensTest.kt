@@ -29,9 +29,9 @@ class NexusThemeTokensTest {
     }
 
     @Test
-    fun `bottom navigation has 5 Portuguese tabs matching design mockup`() {
+    fun `bottom navigation has Portuguese tabs including Apps impact`() {
         val tabs = NexusTab.entries
-        assertEquals(5, tabs.size)
-        assertEquals(listOf("Início", "Limpar", "Jogos", "Bateria", "Sistema"), tabs.map { it.label })
+        assertEquals(6, tabs.size)
+        assertEquals(listOf("Início", "Limpar", "Apps", "Jogos", "Bateria", "Sistema"), tabs.map { it.label })
     }
 }

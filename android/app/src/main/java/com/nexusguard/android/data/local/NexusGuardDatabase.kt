@@ -11,15 +11,34 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BatterySampleEntity::class,
         FileHashCacheEntity::class,
         NexusTrashEntity::class,
-        ChargingSessionEntity::class
+        ChargingSessionEntity::class,
+        AppStorageSnapshotEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class NexusGuardDatabase : RoomDatabase() {
     abstract fun dao(): NexusGuardDao
 
     companion object {
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `app_storage_snapshots` (
+                        `packageName` TEXT NOT NULL,
+                        `totalBytes` INTEGER NOT NULL,
+                        `appBytes` INTEGER NOT NULL,
+                        `dataBytes` INTEGER NOT NULL,
+                        `cacheBytes` INTEGER NOT NULL,
+                        `timestampEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`packageName`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(

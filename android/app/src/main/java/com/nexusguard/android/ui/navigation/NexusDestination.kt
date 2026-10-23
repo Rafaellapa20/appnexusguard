@@ -18,6 +18,11 @@ enum class NexusTab(
         label = "Limpar",
         icon = NexusIcons.Delete
     ),
+    APPS(
+        route = "apps",
+        label = "Apps",
+        icon = NexusIcons.AppsGrid
+    ),
     GAMES(
         route = "games",
         label = "Jogos",
@@ -40,4 +45,6 @@ object NexusRoutes {
     const val HISTORY = "history"
     const val SETTINGS = "settings"
     const val ACTIVE_BOOST = "active_boost"
+    const val HIBERNATION = "hibernation"
+    const val MONTHLY_REPORT = "monthly_report"
 }
