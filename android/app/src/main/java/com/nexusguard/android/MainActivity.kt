@@ -36,14 +36,14 @@ class MainActivity : ComponentActivity() {
             val prefs by mainViewModel.preferencesState.collectAsStateWithLifecycle()
             NexusTheme(darkTheme = prefs.darkThemeEnabled) {
                 if (prefs.isLoaded) {
-                    NexusGuardMainScreen(
-                        preferences = prefs,
-                        onCompleteOnboarding = mainViewModel::completeOnboarding,
-                        onReopenOnboarding = mainViewModel::reopenOnboarding,
-                        onToggleDarkTheme = mainViewModel::setDarkTheme
-                    )
+                    NexusGuardMainScreen(viewModel = mainViewModel)
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        mainViewModel.refreshAllRealData()
     }
 }

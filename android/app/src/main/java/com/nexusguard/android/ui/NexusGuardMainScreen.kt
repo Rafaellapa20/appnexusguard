@@ -1,6 +1,23 @@
 package com.nexusguard.android.ui
 
+import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import android.net.Uri
+import android.os.Build
+import android.os.storage.StorageManager
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,11 +45,19 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.PictureAsPdf
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.RestoreFromTrash
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -41,6 +66,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -56,19 +82,33 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.nexusguard.android.BuildConfig
+import com.nexusguard.android.data.local.BatterySampleEntity
+import com.nexusguard.android.data.local.HistoryEntity
 import com.nexusguard.android.data.preferences.UserPreferencesState
+import com.nexusguard.android.data.repository.CleanCategoryGroup
+import com.nexusguard.android.data.repository.CleanCategoryType
+import com.nexusguard.android.data.repository.CleanScanReport
+import com.nexusguard.android.data.repository.InstalledAppUsageInfo
+import com.nexusguard.android.data.repository.RealSystemSnapshot
+import com.nexusguard.android.domain.NexusFormatters
+import com.nexusguard.android.domain.ScannedFileCandidate
+import com.nexusguard.android.domain.ThermalLevelPt
+import com.nexusguard.android.service.BoostSessionState
 import com.nexusguard.android.ui.components.GaugeShieldLogo
 import com.nexusguard.android.ui.components.NexusCard
 import com.nexusguard.android.ui.components.NexusPrimaryGradientButton
@@ -80,16 +120,24 @@ import com.nexusguard.android.ui.theme.JetBrainsMonoFamily
 import com.nexusguard.android.ui.theme.NexusButtonShape
 import com.nexusguard.android.ui.theme.NexusMonoTextStyles
 import com.nexusguard.android.ui.theme.NexusTheme
+import java.util.Locale
 
 @Composable
 fun NexusGuardMainScreen(
-    preferences: UserPreferencesState,
-    onCompleteOnboarding: () -> Unit,
-    onReopenOnboarding: () -> Unit,
-    onToggleDarkTheme: (Boolean) -> Unit
+    viewModel: MainViewModel
 ) {
+    val preferences by viewModel.preferencesState.collectAsStateWithLifecycle()
+    val snapshot by viewModel.liveSnapshot.collectAsStateWithLifecycle()
+    val recentHistory by viewModel.recentHistory.collectAsStateWithLifecycle()
+    val allHistory by viewModel.allHistory.collectAsStateWithLifecycle()
+    val batterySamples by viewModel.batterySamples24h.collectAsStateWithLifecycle()
+    val cleanReport by viewModel.cleanReport.collectAsStateWithLifecycle()
+    val isScanningClean by viewModel.isScanningClean.collectAsStateWithLifecycle()
+    val analysisState by viewModel.analysisState.collectAsStateWithLifecycle()
+    val boostSession by viewModel.boostSession.collectAsStateWithLifecycle()
+
     if (!preferences.onboardingCompleted) {
-        OnboardingScreen(onFinishOnboarding = onCompleteOnboarding)
+        OnboardingScreen(onFinishOnboarding = viewModel::completeOnboarding)
         return
     }
 
@@ -100,6 +148,36 @@ fun NexusGuardMainScreen(
     val colors = NexusTheme.colors
 
     val showBottomBar = currentRoute in NexusTab.entries.map { it.route }
+
+    // Diálogo de resumo quando termina o Boost
+    boostSession.lastSummary?.let { summary ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissBoostSummary,
+            containerColor = colors.surface,
+            titleContentColor = colors.text,
+            textContentColor = colors.textDim,
+            title = {
+                Text("Resumo do Boost · ${summary.gameName}")
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val tempStr = summary.maxBatteryTempCelsius?.let {
+                        String.format(Locale("pt", "PT"), "%.1f °C", it)
+                    } ?: "N/D"
+                    Text("• Tempo jogado: ${summary.durationFormatted}")
+                    Text("• Temperatura máxima da bateria: $tempStr")
+                    Text("• Pior estado térmico: ${summary.worstThermalLevel.labelPt}")
+                    Text("• Bateria gasta na sessão: ${summary.batteryUsedPercent}%")
+                    Text("• Não incomodar reposto para o estado anterior.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::dismissBoostSummary) {
+                    Text("Fechar", color = colors.accent2)
+                }
+            }
+        )
+    }
 
     Scaffold(
         containerColor = colors.bg,
@@ -124,7 +202,7 @@ fun NexusGuardMainScreen(
                     )
                 }
                 NexusRoutes.ACTIVE_BOOST -> {
-                    // O ecrã de sessão ativa tem o cartão de notificação no topo como na imagem
+                    // O ecrã de sessão ativa mostra o cartão da notificação no topo
                 }
                 else -> {
                     NexusTopBar(
@@ -212,7 +290,12 @@ fun NexusGuardMainScreen(
                 .padding(innerPadding)
         ) {
             composable(NexusTab.HOME.route) {
-                HomeScreenPreview(
+                RealHomeScreen(
+                    snapshot = snapshot,
+                    recentHistory = recentHistory,
+                    analysisState = analysisState,
+                    onRunAnalysis = viewModel::runOneClickAnalysis,
+                    onApplySafeFixes = viewModel::applyAutomaticFixes,
                     onOpenBattery = { navController.navigate(NexusTab.BATTERY.route) },
                     onOpenClean = { navController.navigate(NexusTab.CLEAN.route) },
                     onOpenSystem = { navController.navigate(NexusTab.SYSTEM.route) },
@@ -220,47 +303,81 @@ fun NexusGuardMainScreen(
                 )
             }
             composable(NexusTab.CLEAN.route) {
-                CleanScreenPreview()
+                RealCleanScreen(
+                    snapshot = snapshot,
+                    cleanReport = cleanReport,
+                    isScanning = isScanningClean,
+                    onRefreshScan = viewModel::refreshCleanScan,
+                    buildTrashIntent = viewModel::buildMoveToTrashIntentSender,
+                    onTrashConfirmed = viewModel::onTrashRequestConfirmed
+                )
             }
             composable(NexusTab.GAMES.route) {
-                GamesScreenPreview(
-                    onStartBoost = {
+                RealGamesScreen(
+                    snapshot = snapshot,
+                    boostSession = boostSession,
+                    hasDndPermission = viewModel.hasDndPermission(),
+                    onStartBoost = { pkg, name, monogram, dnd, stopBg, launchGame ->
+                        viewModel.startBoost(pkg, name, monogram, dnd, stopBg, launchGame)
+                        navController.navigate(NexusRoutes.ACTIVE_BOOST)
+                    },
+                    onOpenActiveSession = {
                         navController.navigate(NexusRoutes.ACTIVE_BOOST)
                     }
                 )
             }
             composable(NexusTab.BATTERY.route) {
-                BatteryScreenPreview(
+                RealBatteryScreen(
+                    snapshot = snapshot,
+                    batterySamples = batterySamples,
+                    preferences = preferences,
+                    onToggleStorageAlert = viewModel::setStorageAlert,
+                    onToggleThermalAlert = viewModel::setThermalAlert,
+                    onToggleBatteryAlert = viewModel::setBatteryAlert,
                     onViewBackgroundApps = {
                         navController.navigate(NexusTab.SYSTEM.route)
                     }
                 )
             }
             composable(NexusTab.SYSTEM.route) {
-                SystemScreenPreview(
-                    onOpenSettings = {
-                        navController.navigate(NexusRoutes.SETTINGS)
-                    },
-                    onOpenHistory = {
-                        navController.navigate(NexusRoutes.HISTORY)
-                    }
+                RealSystemScreen(
+                    snapshot = snapshot,
+                    onRefresh = viewModel::refreshAllRealData,
+                    onStopPermittedBackground = viewModel::stopBackgroundAppsManual,
+                    onOpenSettings = { navController.navigate(NexusRoutes.SETTINGS) },
+                    onOpenHistory = { navController.navigate(NexusRoutes.HISTORY) }
                 )
             }
             composable(NexusRoutes.ACTIVE_BOOST) {
-                ActiveBoostSessionScreenPreview(
+                RealActiveBoostScreen(
+                    snapshot = snapshot,
+                    boostSession = boostSession,
                     onStopBoost = {
+                        viewModel.stopBoost()
                         navController.popBackStack()
                     }
                 )
             }
             composable(NexusRoutes.HISTORY) {
-                HistoryScreenPreview()
+                RealHistoryScreen(
+                    entries = allHistory,
+                    buildRestoreIntent = viewModel::buildRestoreFromTrashIntentSender,
+                    onRestoreConfirmed = viewModel::onRestoreConfirmed,
+                    onExportPdf = viewModel::exportHistoryPdf
+                )
             }
             composable(NexusRoutes.SETTINGS) {
-                Phase1SettingsScreen(
-                    darkThemeEnabled = preferences.darkThemeEnabled,
-                    onToggleDarkTheme = onToggleDarkTheme,
-                    onReopenOnboarding = onReopenOnboarding
+                RealSettingsScreen(
+                    preferences = preferences,
+                    snapshot = snapshot,
+                    cleanReport = cleanReport,
+                    hasDndPermission = viewModel.hasDndPermission(),
+                    onToggleDarkTheme = viewModel::setDarkTheme,
+                    onToggleWeeklyScan = viewModel::setWeeklyScan,
+                    onToggleStorageAlert = viewModel::setStorageAlert,
+                    onToggleThermalAlert = viewModel::setThermalAlert,
+                    onToggleBatteryAlert = viewModel::setBatteryAlert,
+                    onReopenOnboarding = viewModel::reopenOnboarding
                 )
             }
         }
@@ -328,16 +445,79 @@ private fun SecondaryTopBar(
 }
 
 // ============================================================================
-// 1 · INÍCIO (Exatamente como no mockup)
+// 1 · INÍCIO (100% Dados Reais do Telemóvel)
 // ============================================================================
 @Composable
-private fun HomeScreenPreview(
+private fun RealHomeScreen(
+    snapshot: RealSystemSnapshot,
+    recentHistory: List<HistoryEntity>,
+    analysisState: OneClickAnalysisState,
+    onRunAnalysis: () -> Unit,
+    onApplySafeFixes: () -> Unit,
     onOpenBattery: () -> Unit,
     onOpenClean: () -> Unit,
     onOpenSystem: () -> Unit,
     onOpenHistory: () -> Unit
 ) {
     val colors = NexusTheme.colors
+    val context = LocalContext.current
+    val score = snapshot.healthScore
+    val ringStatusColor = when {
+        score >= 80 -> colors.ok
+        score >= 60 -> colors.warn
+        else -> colors.danger
+    }
+
+    val lastAnalysisEntry = recentHistory.firstOrNull { it.actionType == "ANALYSIS" }
+    val ringCaption = when {
+        analysisState.completedOnce -> {
+            "Análise concluída · ${analysisState.proposedFixes.size} sugestão(ões)"
+        }
+        lastAnalysisEntry != null -> {
+            "Última análise ${NexusFormatters.formatRelativeTimePt(lastAnalysisEntry.timestampEpochMillis)}"
+        }
+        else -> {
+            "Sensores medidos ao vivo · Toque em Analisar agora"
+        }
+    }
+
+    val freeStorageGb = NexusFormatters.formatGigabytesInt(snapshot.storage.freeBytes)
+    val totalStorageGb = NexusFormatters.formatGigabytesInt(snapshot.storage.totalBytes)
+    val freeRatio = if (snapshot.storage.totalBytes > 0) {
+        snapshot.storage.freeBytes.toFloat() / snapshot.storage.totalBytes.toFloat()
+    } else 1f
+    val storageDotColor = when {
+        freeRatio < 0.10f -> colors.danger
+        freeRatio < 0.20f -> colors.warn
+        else -> colors.ok
+    }
+
+    val tempText = snapshot.battery.temperatureCelsius?.let {
+        String.format(Locale("pt", "PT"), "%.1f °C", it)
+    } ?: "N/D"
+    val batteryDotColor = if (snapshot.battery.isHealthy && (snapshot.battery.temperatureCelsius ?: 30f) < 40f) {
+        colors.ok
+    } else {
+        colors.warn
+    }
+
+    val thermalDotColor = when (snapshot.thermal.level) {
+        ThermalLevelPt.NORMAL, ThermalLevelPt.INDISPONIVEL -> colors.ok
+        ThermalLevelPt.LIGEIRO, ThermalLevelPt.MODERADO -> colors.warn
+        ThermalLevelPt.GRAVE, ThermalLevelPt.CRITICO -> colors.danger
+    }
+
+    val unusedValueText = if (snapshot.hasUsageStatsPermission) {
+        snapshot.unusedAppsCount.toString()
+    } else {
+        "Ativar"
+    }
+    val unusedSubtitleText = if (snapshot.hasUsageStatsPermission) {
+        "> 30 dias (${snapshot.installedApps.size} apps lidas)"
+    } else {
+        "toque para UsageStats"
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -345,7 +525,7 @@ private fun HomeScreenPreview(
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Anel grande de Saúde (0-100) + legenda
+        // Anel grande de Saúde (0-100) medido de verdade
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -371,60 +551,158 @@ private fun HomeScreenPreview(
                     drawArc(
                         brush = ringBrush,
                         startAngle = -90f,
-                        sweepAngle = 360f * 0.82f,
+                        sweepAngle = 360f * (score / 100f),
                         useCenter = false,
                         style = Stroke(width = 13.dp.toPx(), cap = StrokeCap.Round)
                     )
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "82",
+                        text = score.toString(),
                         style = NexusMonoTextStyles.metricHero.copy(fontSize = 42.sp),
                         color = colors.text
                     )
                     Text(
-                        text = "Saúde boa",
+                        text = snapshot.healthLabel,
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                        color = colors.ok
+                        color = ringStatusColor
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Última análise há 2 h · 3 sugestões",
+                text = ringCaption,
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.textMuted
             )
         }
 
-        // Botão principal «Analisar agora» em gradiente
+        // Botão principal «Analisar agora»
         NexusPrimaryGradientButton(
-            text = "Analisar agora",
-            onClick = {},
+            text = if (analysisState.isRunning) "A analisar..." else "Analisar agora",
+            enabled = !analysisState.isRunning,
+            onClick = onRunAnalysis,
             modifier = Modifier.fillMaxWidth()
         )
 
-        // 4 Cartões: Armazenamento, Bateria, Térmica, Apps sem uso
+        // Progresso e resultados do fluxo «Analisar e corrigir com 1 clique»
+        if (analysisState.isRunning || analysisState.completedOnce) {
+            NexusCard(
+                backgroundColor = colors.surface,
+                borderColor = colors.borderStrong,
+                contentPadding = PaddingValues(14.dp)
+            ) {
+                if (analysisState.isRunning) {
+                    Text(
+                        text = analysisState.stepText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.text
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { analysisState.progressFraction },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accent2,
+                        trackColor = colors.surfaceAlt
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Diagnóstico e Correções",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colors.text
+                        )
+                        val autoFixes = analysisState.proposedFixes.count { !it.requiresSystemConfirmation && !it.isResolved }
+                        if (autoFixes > 0) {
+                            Text(
+                                text = "Corrigir tudo",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = colors.accent2,
+                                modifier = Modifier.clickable(onClick = onApplySafeFixes)
+                            )
+                        }
+                    }
+
+                    analysisState.statusMessage?.let { msg ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = msg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.ok
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    analysisState.proposedFixes.forEach { fix ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = fix.title,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = if (fix.isResolved) colors.ok else colors.text
+                                )
+                                Text(
+                                    text = fix.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colors.textMuted
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            if (fix.isResolved) {
+                                Text("Concluído", style = NexusMonoTextStyles.badge, color = colors.ok)
+                            } else {
+                                Text(
+                                    text = if (fix.requiresSystemConfirmation) "Ação necessária" else "Corrigir",
+                                    style = NexusMonoTextStyles.badge,
+                                    color = if (fix.requiresSystemConfirmation) colors.warn else colors.accent2,
+                                    modifier = Modifier.clickable {
+                                        when (fix.actionRouteOrType) {
+                                            "AUTO_BG" -> onApplySafeFixes()
+                                            "OPEN_CLEAN" -> onOpenClean()
+                                            "OPEN_SYSTEM" -> onOpenSystem()
+                                            "OPEN_USAGE_PERM" -> openUsageAccessSettings(context)
+                                            "OPEN_MEDIA_PERM" -> onOpenClean()
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4 Cartões Reais: Armazenamento, Bateria, Térmica, Apps sem uso
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             HomeStatusCard(
                 modifier = Modifier.weight(1f),
-                dotColor = colors.warn,
+                dotColor = storageDotColor,
                 label = "Armazenamento",
-                value = "38 GB",
-                subtitle = "livres de 128",
+                value = freeStorageGb,
+                subtitle = "livres de $totalStorageGb",
                 useMonoFont = true,
                 onClick = onOpenClean
             )
             HomeStatusCard(
                 modifier = Modifier.weight(1f),
-                dotColor = colors.ok,
+                dotColor = batteryDotColor,
                 label = "Bateria",
-                value = "91%",
-                subtitle = "saúde · 31 °C",
+                value = "${snapshot.battery.levelPercent}%",
+                subtitle = "${snapshot.battery.healthLabelPt.lowercase()} · $tempText",
                 useMonoFont = true,
                 onClick = onOpenBattery
             )
@@ -436,25 +714,31 @@ private fun HomeScreenPreview(
         ) {
             HomeStatusCard(
                 modifier = Modifier.weight(1f),
-                dotColor = colors.ok,
+                dotColor = thermalDotColor,
                 label = "Térmica",
-                value = "Normal",
-                subtitle = "margem 0,42",
+                value = snapshot.thermal.level.labelPt,
+                subtitle = snapshot.thermal.headroomText,
                 useMonoFont = false,
                 onClick = onOpenSystem
             )
             HomeStatusCard(
                 modifier = Modifier.weight(1f),
-                dotColor = colors.warn,
+                dotColor = if (snapshot.unusedAppsCount > 0 || !snapshot.hasUsageStatsPermission) colors.warn else colors.ok,
                 label = "Apps sem uso",
-                value = "7",
-                subtitle = "> 30 dias",
-                useMonoFont = true,
-                onClick = onOpenSystem
+                value = unusedValueText,
+                subtitle = unusedSubtitleText,
+                useMonoFont = snapshot.hasUsageStatsPermission,
+                onClick = {
+                    if (!snapshot.hasUsageStatsPermission) {
+                        openUsageAccessSettings(context)
+                    } else {
+                        onOpenSystem()
+                    }
+                }
             )
         }
 
-        // Secção Recente (as últimas 3 ações)
+        // Secção Recente (as últimas 3 ações reais da base de dados Room)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -466,23 +750,25 @@ private fun HomeScreenPreview(
                 color = colors.textMuted
             )
             Spacer(modifier = Modifier.height(8.dp))
-            RecentActionRow(
-                title = "Limpeza · 1,4 GB para o Lixo",
-                timeLabel = "ontem",
-                onClick = onOpenHistory
-            )
-            HorizontalDivider(color = colors.border.copy(alpha = 0.6f))
-            RecentActionRow(
-                title = "Boost · Genshin Impact 1 h 05",
-                timeLabel = "ontem",
-                onClick = onOpenHistory
-            )
-            HorizontalDivider(color = colors.border.copy(alpha = 0.6f))
-            RecentActionRow(
-                title = "Análise semanal",
-                timeLabel = "seg.",
-                onClick = onOpenHistory
-            )
+            if (recentHistory.isEmpty()) {
+                Text(
+                    text = "Sem ações registadas ainda. Ao analisar, limpar ou usar o Boost, tudo fica registado aqui.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textDim,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                recentHistory.forEachIndexed { idx, entry ->
+                    RecentActionRow(
+                        title = entry.title,
+                        timeLabel = NexusFormatters.formatRelativeTimePt(entry.timestampEpochMillis),
+                        onClick = onOpenHistory
+                    )
+                    if (idx < recentHistory.lastIndex) {
+                        HorizontalDivider(color = colors.border.copy(alpha = 0.6f))
+                    }
+                }
+            }
         }
     }
 }
@@ -529,7 +815,9 @@ private fun HomeStatusCard(
             } else {
                 MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
             },
-            color = colors.text
+            color = colors.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
@@ -538,7 +826,9 @@ private fun HomeStatusCard(
                 fontFamily = JetBrainsMonoFamily,
                 fontSize = 11.sp
             ),
-            color = colors.textMuted
+            color = colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -561,8 +851,12 @@ private fun RecentActionRow(
         Text(
             text = title,
             style = MaterialTheme.typography.bodyMedium,
-            color = colors.text
+            color = colors.text,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
+        Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = timeLabel,
             style = NexusMonoTextStyles.metricSmall.copy(fontSize = 12.sp),
@@ -572,16 +866,24 @@ private fun RecentActionRow(
 }
 
 // ============================================================================
-// 2 · BATERIA (Exatamente como no mockup)
+// 2 · BATERIA (100% Dados Reais do BatteryManager)
 // ============================================================================
 @Composable
-private fun BatteryScreenPreview(
+private fun RealBatteryScreen(
+    snapshot: RealSystemSnapshot,
+    batterySamples: List<BatterySampleEntity>,
+    preferences: UserPreferencesState,
+    onToggleStorageAlert: (Boolean) -> Unit,
+    onToggleThermalAlert: (Boolean) -> Unit,
+    onToggleBatteryAlert: (Boolean) -> Unit,
     onViewBackgroundApps: () -> Unit
 ) {
     val colors = NexusTheme.colors
-    var chargeWarning80 by remember { mutableStateOf(true) }
-    var heatAlert40 by remember { mutableStateOf(true) }
-    var nightSaver by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val bat = snapshot.battery
+    val tempStr = bat.temperatureCelsius?.let {
+        String.format(Locale("pt", "PT"), "%.1f °C", it)
+    } ?: "N/D"
 
     Column(
         modifier = Modifier
@@ -590,7 +892,7 @@ private fun BatteryScreenPreview(
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Cartão principal com ícone vertical de bateria em gradiente + 82%
+        // Cartão principal com nível real da bateria + corrente/tensão medidas
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border,
@@ -600,22 +902,22 @@ private fun BatteryScreenPreview(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                VerticalBatteryGraphic(level = 0.82f)
+                VerticalBatteryGraphic(level = bat.levelPercent / 100f)
                 Spacer(modifier = Modifier.width(18.dp))
                 Column {
                     Text(
-                        text = "82%",
+                        text = "${bat.levelPercent}%",
                         style = NexusMonoTextStyles.metricHero.copy(fontSize = 36.sp),
                         color = colors.text
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "~9 h 40 min restantes",
+                        text = bat.statusLineText,
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.textDim
                     )
                     Text(
-                        text = "estimativa ao ritmo atual",
+                        text = bat.detailLineText,
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.textMuted
                     )
@@ -623,7 +925,7 @@ private fun BatteryScreenPreview(
             }
         }
 
-        // 3 mini cartões: Saúde (91%), Ciclos (214), Temp. (31 °C)
+        // 3 mini cartões reais: Saúde, Ciclos (ou explicação N/D), Temp. real
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -631,89 +933,116 @@ private fun BatteryScreenPreview(
             MiniBatteryStatCard(
                 modifier = Modifier.weight(1f),
                 label = "Saúde",
-                value = "91%",
-                valueColor = colors.ok
+                value = bat.healthLabelPt,
+                subtitle = "BatteryManager",
+                valueColor = if (bat.isHealthy) colors.ok else colors.warn
             )
             MiniBatteryStatCard(
                 modifier = Modifier.weight(1f),
                 label = "Ciclos",
-                value = "214",
+                value = bat.cycleCountText,
+                subtitle = bat.cycleCountReason,
                 valueColor = colors.text
             )
             MiniBatteryStatCard(
                 modifier = Modifier.weight(1f),
                 label = "Temp.",
-                value = "31 °C",
+                value = tempStr,
+                subtitle = "${bat.voltageMv} mV",
                 valueColor = colors.text
             )
         }
 
-        // Gráfico Últimas 24 h / nível %
+        // Gráfico de amostras reais de nível % registadas no dispositivo
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border,
             contentPadding = PaddingValues(14.dp)
         ) {
+            val chartSamples = remember(batterySamples, bat.levelPercent, bat.isCharging) {
+                val ordered = batterySamples.reversed()
+                if (ordered.isEmpty()) {
+                    listOf(
+                        BatterySampleEntity(
+                            timestampEpochMillis = System.currentTimeMillis(),
+                            levelPercent = bat.levelPercent,
+                            temperatureCelsius = bat.temperatureCelsius ?: 30f,
+                            isCharging = bat.isCharging
+                        )
+                    )
+                } else {
+                    ordered
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Últimas 24 h",
+                    text = "Histórico medido (${chartSamples.size} amostra(s))",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textDim
                 )
                 Text(
-                    text = "nível %",
+                    text = "nível % (atual ${bat.levelPercent}%)",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textMuted
                 )
             }
             Spacer(modifier = Modifier.height(12.dp))
-            Battery24hBarsChart()
+            RealBatteryBarsChart(samples = chartSamples)
         }
 
-        // 3 Toggles de proteção da bateria
+        // 3 Toggles reais persistidos em DataStore
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border,
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
         ) {
             NexusToggleRow(
-                title = "Aviso de carga a 80 %",
-                subtitle = "Carregar menos poupa a bateria a longo prazo",
-                checked = chargeWarning80,
-                onCheckedChange = { chargeWarning80 = it }
+                title = "Alerta de armazenamento (< 10 %)",
+                subtitle = "Notifica quando o espaço livre desce abaixo de 10 %",
+                checked = preferences.storageAlertEnabled,
+                onCheckedChange = onToggleStorageAlert
             )
             HorizontalDivider(color = colors.border)
             NexusToggleRow(
                 title = "Alerta de aquecimento",
-                subtitle = "Avisa acima de 40 °C a carregar",
-                checked = heatAlert40,
-                onCheckedChange = { heatAlert40 = it }
+                subtitle = "Notifica se o estado térmico chegar a Grave ou Crítico",
+                checked = preferences.thermalAlertEnabled,
+                onCheckedChange = onToggleThermalAlert
             )
             HorizontalDivider(color = colors.border)
             NexusToggleRow(
-                title = "Modo noturno de poupança",
-                subtitle = "Abre a Poupança de bateria às 23:00",
-                checked = nightSaver,
-                onCheckedChange = { nightSaver = it }
+                title = "Alerta de bateria degradada",
+                subtitle = "Notifica se o BatteryManager reportar degradação ou sobretensão",
+                checked = preferences.batteryAlertEnabled,
+                onCheckedChange = onToggleBatteryAlert
             )
         }
 
-        // Banner inferior: 3 apps gastam muito em fundo
+        // Banner inferior real: apps em fundo / UsageStats
         NexusCard(
             backgroundColor = Color(0xFF1F1B16),
             borderColor = colors.warn.copy(alpha = 0.45f),
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
-            onClick = onViewBackgroundApps
+            onClick = {
+                if (!snapshot.hasUsageStatsPermission) {
+                    openUsageAccessSettings(context)
+                } else {
+                    onViewBackgroundApps()
+                }
+            }
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Box(
                         modifier = Modifier
                             .size(7.dp)
@@ -722,13 +1051,18 @@ private fun BatteryScreenPreview(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "3 apps gastam muito em fundo",
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = if (snapshot.hasUsageStatsPermission) {
+                            "${snapshot.highBackgroundAppsCount} app(s) com atividade relevante · ${snapshot.unusedAppsCount} sem uso (>30d)"
+                        } else {
+                            "Autoriza o acesso ao uso para ver as apps que mais gastam bateria"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
                         color = colors.text
                     )
                 }
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Ver",
+                    text = if (snapshot.hasUsageStatsPermission) "Ver" else "Autorizar",
                     style = MaterialTheme.typography.labelLarge,
                     color = colors.warn
                 )
@@ -748,14 +1082,12 @@ private fun VerticalBatteryGraphic(level: Float) {
         val capHeight = 5.dp.toPx()
         val bodyTop = capHeight + 3.dp.toPx()
         val bodyHeight = size.height - bodyTop
-        // Pino superior da bateria
         drawRoundRect(
             color = colors.borderStrong,
             topLeft = Offset((size.width - capWidth) / 2f, 0f),
             size = Size(capWidth, capHeight),
             cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
         )
-        // Corpo exterior
         drawRoundRect(
             color = colors.borderStrong,
             topLeft = Offset(0f, bodyTop),
@@ -763,7 +1095,6 @@ private fun VerticalBatteryGraphic(level: Float) {
             cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx()),
             style = Stroke(width = 2.dp.toPx())
         )
-        // Preenchimento em gradiente
         val inset = 4.dp.toPx()
         val maxFillHeight = bodyHeight - inset * 2
         val currentFillHeight = maxFillHeight * level.coerceIn(0f, 1f)
@@ -781,6 +1112,7 @@ private fun MiniBatteryStatCard(
     modifier: Modifier = Modifier,
     label: String,
     value: String,
+    subtitle: String,
     valueColor: Color
 ) {
     val colors = NexusTheme.colors
@@ -798,19 +1130,32 @@ private fun MiniBatteryStatCard(
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = value,
-            style = NexusMonoTextStyles.metricMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold),
-            color = valueColor
+            style = NexusMonoTextStyles.metricMedium.copy(fontSize = 17.sp, fontWeight = FontWeight.Bold),
+            color = valueColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+            color = colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
 
 @Composable
-private fun Battery24hBarsChart() {
+private fun RealBatteryBarsChart(samples: List<BatterySampleEntity>) {
     val colors = NexusTheme.colors
-    val levels = listOf(
-        0.92f, 0.88f, 0.84f, 0.78f, 0.72f, 0.68f, 0.62f, 0.56f, 0.48f, 0.42f,
-        0.58f, 0.74f, 0.88f, 0.94f, 0.91f, 0.88f, 0.86f, 0.84f, 0.83f, 0.82f
-    )
+    val padded = remember(samples) {
+        val list = samples.takeLast(20)
+        if (list.size < 20) {
+            List(20 - list.size) { null } + list
+        } else {
+            list
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -818,45 +1163,211 @@ private fun Battery24hBarsChart() {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.Bottom
     ) {
-        levels.forEachIndexed { index, ratio ->
-            val isChargingSlice = index in 10..14
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(ratio)
-                    .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                    .background(if (isChargingSlice) colors.accent2 else colors.accent)
-            )
+        padded.forEach { sample ->
+            if (sample == null) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(0.12f)
+                        .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                        .background(colors.surfaceAlt)
+                )
+            } else {
+                val ratio = (sample.levelPercent / 100f).coerceIn(0.08f, 1f)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(ratio)
+                        .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                        .background(if (sample.isCharging) colors.accent2 else colors.accent)
+                )
+            }
         }
     }
 }
 
 // ============================================================================
-// 3 · LIMPAR (Exatamente como no mockup)
+// 3 · LIMPAR (100% Ficheiros Reais via MediaStore + Lixo do Sistema)
 // ============================================================================
-data class CleanCategoryPreviewItem(
-    val title: String,
-    val subtitle: String,
-    val sizeLabel: String,
-    val defaultSelected: Boolean
-)
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CleanScreenPreview() {
+private fun RealCleanScreen(
+    snapshot: RealSystemSnapshot,
+    cleanReport: CleanScanReport,
+    isScanning: Boolean,
+    onRefreshScan: () -> Unit,
+    buildTrashIntent: (List<ScannedFileCandidate>) -> android.content.IntentSender?,
+    onTrashConfirmed: (List<ScannedFileCandidate>, List<String>) -> Unit
+) {
     val colors = NexusTheme.colors
-    val categories = remember {
-        listOf(
-            CleanCategoryPreviewItem("APK já instalados", "Transferências · 4 ficheiros", "612 MB", true),
-            CleanCategoryPreviewItem("Ficheiros grandes", "> 100 MB · 3 ficheiros", "1,1 GB", true),
-            CleanCategoryPreviewItem("Transferências antigas", "> 90 dias", "380 MB", true),
-            CleanCategoryPreviewItem("Duplicados", "23 fotos iguais", "214 MB", true),
-            CleanCategoryPreviewItem("Capturas de ecrã antigas", "> 6 meses", "96 MB", false),
-            CleanCategoryPreviewItem("Pastas vazias", "41 pastas", "0 B", false)
+    val context = LocalContext.current
+
+    val selectedCategories = remember {
+        mutableStateListOf(
+            CleanCategoryType.INSTALLED_APKS,
+            CleanCategoryType.LARGE_FILES,
+            CleanCategoryType.OLD_DOWNLOADS,
+            CleanCategoryType.DUPLICATES
         )
     }
-    val checkedStates = remember {
-        mutableStateListOf(*categories.map { it.defaultSelected }.toTypedArray())
+
+    var previewingCategory by remember { mutableStateOf<CleanCategoryGroup?>(null) }
+    var showConfirmTrashSheet by remember { mutableStateOf(false) }
+
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        onRefreshScan()
     }
+
+    val pendingFilesToTrash = remember(cleanReport, selectedCategories.toList()) {
+        cleanReport.categories
+            .filter { it.type in selectedCategories }
+            .flatMap { it.files }
+            .distinctBy { it.contentUri }
+    }
+    val pendingEmptyFolders = remember(cleanReport, selectedCategories.toList()) {
+        cleanReport.categories
+            .filter { it.type == CleanCategoryType.EMPTY_FOLDERS && it.type in selectedCategories }
+            .flatMap { it.emptyFoldersPaths }
+    }
+    val totalSelectedBytes = pendingFilesToTrash.sumOf { it.sizeBytes }
+
+    val trashIntentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            onTrashConfirmed(pendingFilesToTrash, pendingEmptyFolders)
+            Toast.makeText(
+                context,
+                "Movido para o Lixo do sistema com sucesso!",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    // Folha inferior de pré-visualização obrigatória de uma categoria ou antes de mover para o Lixo
+    if (previewingCategory != null || showConfirmTrashSheet) {
+        val group = previewingCategory
+        val filesList = group?.files ?: pendingFilesToTrash
+        val titleText = group?.type?.titlePt ?: "Pré-visualização antes de mover para o Lixo"
+
+        ModalBottomSheet(
+            onDismissRequest = {
+                previewingCategory = null
+                showConfirmTrashSheet = false
+            },
+            containerColor = colors.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = titleText,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = colors.text
+                )
+                Text(
+                    text = "Verifica os ficheiros reais encontrados no teu telemóvel antes de confirmar:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textDim
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(260.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (filesList.isEmpty() && (group?.emptyFoldersPaths.isNullOrEmpty() && pendingEmptyFolders.isEmpty())) {
+                        Text(
+                            text = "Nenhum ficheiro encontrado nesta categoria.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.textMuted
+                        )
+                    } else {
+                        filesList.forEach { file ->
+                            NexusCard(
+                                backgroundColor = colors.surfaceAlt,
+                                borderColor = colors.border,
+                                contentPadding = PaddingValues(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = file.displayName,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = colors.text,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = file.relativePath.ifBlank { "Armazenamento partilhado" },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.textMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = NexusFormatters.formatBytes(file.sizeBytes),
+                                        style = NexusMonoTextStyles.metricSmall,
+                                        color = colors.accent2
+                                    )
+                                }
+                            }
+                        }
+                        val folders = group?.emptyFoldersPaths ?: pendingEmptyFolders
+                        folders.forEach { folderPath ->
+                            NexusCard(
+                                backgroundColor = colors.surfaceAlt,
+                                borderColor = colors.border,
+                                contentPadding = PaddingValues(10.dp)
+                            ) {
+                                Text(
+                                    text = "Pasta vazia: $folderPath",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colors.textDim
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (showConfirmTrashSheet && (pendingFilesToTrash.isNotEmpty() || pendingEmptyFolders.isNotEmpty())) {
+                    NexusPrimaryGradientButton(
+                        text = "Confirmar e Mover para o Lixo (${NexusFormatters.formatBytes(totalSelectedBytes)})",
+                        onClick = {
+                            showConfirmTrashSheet = false
+                            if (pendingFilesToTrash.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                val sender = buildTrashIntent(pendingFilesToTrash)
+                                if (sender != null) {
+                                    trashIntentLauncher.launch(IntentSenderRequest.Builder(sender).build())
+                                }
+                            } else {
+                                onTrashConfirmed(pendingFilesToTrash, pendingEmptyFolders)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+
+    val st = snapshot.storage
+    val usedGb = NexusFormatters.formatGigabytesInt(st.usedBytes)
+    val totalGb = NexusFormatters.formatGigabytesInt(st.totalBytes)
 
     Column(
         modifier = Modifier
@@ -870,13 +1381,76 @@ private fun CleanScreenPreview() {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = "Tudo vai para o Lixo do sistema. Podes restaurar durante 30 dias.",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.textDim
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Tudo vai para o Lixo do sistema. Podes restaurar durante 30 dias.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textDim,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onRefreshScan) {
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.accent2
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = "Atualizar análise",
+                            tint = colors.accent2
+                        )
+                    }
+                }
+            }
 
-            // Cartão de Armazenamento com barra segmentada
+            // Aviso e pedido contextual de permissão se ainda não concedida
+            if (!cleanReport.hasMediaPermission) {
+                NexusCard(
+                    backgroundColor = colors.surfaceAlt,
+                    borderColor = colors.accent2,
+                    contentPadding = PaddingValues(14.dp)
+                ) {
+                    Text(
+                        text = "Permissão necessária para analisar ficheiros",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.text
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Para procurar ficheiros grandes, duplicados e capturas antigas no teu telemóvel, concede acesso de leitura.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textDim
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    NexusPrimaryGradientButton(
+                        text = "Permitir leitura de ficheiros",
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                mediaPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.READ_MEDIA_IMAGES,
+                                        Manifest.permission.READ_MEDIA_VIDEO,
+                                        Manifest.permission.READ_MEDIA_AUDIO
+                                    )
+                                )
+                            } else {
+                                mediaPermissionLauncher.launch(
+                                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            // Cartão de Armazenamento Real com barra segmentada proporcional
             NexusCard(
                 backgroundColor = colors.surface,
                 borderColor = colors.border,
@@ -888,19 +1462,25 @@ private fun CleanScreenPreview() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Armazenamento",
+                        text = "Armazenamento real",
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.textDim
                     )
                     Text(
-                        text = "90 / 128 GB",
+                        text = "$usedGb / $totalGb",
                         style = NexusMonoTextStyles.metricSmall,
                         color = colors.text
                     )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Barra segmentada (Apps, Fotos, Vídeos, Lixo, Livre)
+                val totalF = st.totalBytes.coerceAtLeast(1L).toFloat()
+                val appsW = (st.appsAndSystemBytes / totalF).coerceIn(0.04f, 0.85f)
+                val photosW = (st.photosBytes / totalF).coerceIn(0.01f, 0.50f)
+                val videosW = (st.videosBytes / totalF).coerceIn(0.01f, 0.50f)
+                val cleanW = (cleanReport.totalCleanableBytes / totalF).coerceIn(0.01f, 0.30f)
+                val freeW = (st.freeBytes / totalF).coerceIn(0.05f, 0.90f)
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -910,29 +1490,29 @@ private fun CleanScreenPreview() {
                 ) {
                     Box(
                         modifier = Modifier
-                            .weight(0.32f)
+                            .weight(appsW)
                             .fillMaxHeight()
                             .background(colors.accent)
                     )
                     Box(
                         modifier = Modifier
-                            .weight(0.20f)
+                            .weight(photosW)
                             .fillMaxHeight()
                             .background(colors.accent2)
                     )
                     Box(
                         modifier = Modifier
-                            .weight(0.12f)
+                            .weight(videosW)
                             .fillMaxHeight()
                             .background(colors.ok)
                     )
                     Box(
                         modifier = Modifier
-                            .weight(0.06f)
+                            .weight(cleanW)
                             .fillMaxHeight()
                             .background(colors.warn)
                     )
-                    Spacer(modifier = Modifier.weight(0.30f))
+                    Spacer(modifier = Modifier.weight(freeW))
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -940,25 +1520,27 @@ private fun CleanScreenPreview() {
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    StorageLegendDot("Apps", colors.accent)
-                    StorageLegendDot("Fotos", colors.accent2)
-                    StorageLegendDot("Vídeos", colors.ok)
-                    StorageLegendDot("Lixo", colors.warn)
+                    StorageLegendDot("Apps/Sist.", colors.accent)
+                    StorageLegendDot("Fotos (${NexusFormatters.formatBytes(st.photosBytes)})", colors.accent2)
+                    StorageLegendDot("Vídeos (${NexusFormatters.formatBytes(st.videosBytes)})", colors.ok)
+                    StorageLegendDot("Limpar", colors.warn)
                 }
             }
 
-            // Lista agrupada de categorias
+            // Lista agrupada das 6 categorias reais (tocar abre pré-visualização, tocar na checkbox seleciona)
             NexusCard(
                 backgroundColor = colors.surface,
                 borderColor = colors.border,
                 contentPadding = PaddingValues(0.dp)
             ) {
-                categories.forEachIndexed { index, item ->
-                    val isChecked = checkedStates[index]
+                cleanReport.categories.forEachIndexed { index, group ->
+                    val isChecked = group.type in selectedCategories
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { checkedStates[index] = !isChecked }
+                            .clickable {
+                                previewingCategory = group
+                            }
                             .padding(horizontal = 14.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -967,39 +1549,80 @@ private fun CleanScreenPreview() {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.weight(1f)
                         ) {
-                            NexusCyanCheckbox(checked = isChecked)
+                            Box(
+                                modifier = Modifier.clickable {
+                                    if (isChecked) {
+                                        selectedCategories.remove(group.type)
+                                    } else {
+                                        selectedCategories.add(group.type)
+                                    }
+                                }
+                            ) {
+                                NexusCyanCheckbox(checked = isChecked)
+                            }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = item.title,
+                                    text = group.type.titlePt,
                                     style = MaterialTheme.typography.titleMedium.copy(fontSize = 15.sp),
                                     color = if (isChecked) colors.text else colors.textDim
                                 )
                                 Text(
-                                    text = item.subtitle,
+                                    text = "${group.subtitlePt} · tocar p/ pré-visualizar",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = colors.textMuted
                                 )
                             }
                         }
                         Text(
-                            text = item.sizeLabel,
+                            text = NexusFormatters.formatBytes(group.totalSizeBytes),
                             style = NexusMonoTextStyles.metricSmall,
-                            color = if (isChecked) colors.text else colors.textMuted
+                            color = if (group.totalSizeBytes > 0) colors.text else colors.textMuted
                         )
                     }
-                    if (index < categories.lastIndex) {
+                    if (index < cleanReport.categories.lastIndex) {
                         HorizontalDivider(color = colors.border)
+                    }
+                }
+            }
+
+            // Atalhos de sistema: Caches de outras apps + Modo Avançado (MANAGE_EXTERNAL_STORAGE no flavor full)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { openSystemClearCacheAction(context) },
+                    shape = NexusButtonShape,
+                    modifier = Modifier
+                        .weight(1f)
+                        .defaultMinSize(minHeight = 48.dp)
+                ) {
+                    Text("Caches de apps", color = colors.text, fontSize = 12.sp)
+                }
+                if (BuildConfig.IS_FULL_FLAVOR && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !cleanReport.hasManageStoragePermission) {
+                    OutlinedButton(
+                        onClick = { openManageAllFilesSettings(context) },
+                        shape = NexusButtonShape,
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 48.dp)
+                    ) {
+                        Text("Modo avançado (APK/Pastas)", color = colors.accent2, fontSize = 12.sp)
                     }
                 }
             }
         }
 
-        // Barra fixa inferior «Mover para o Lixo · 2,3 GB»
+        // Barra fixa inferior «Mover para o Lixo · X MB/GB» (abre pré-visualização obrigatória antes de confirmar)
         Box(modifier = Modifier.padding(vertical = 10.dp)) {
+            val hasSelection = pendingFilesToTrash.isNotEmpty() || pendingEmptyFolders.isNotEmpty()
             NexusPrimaryGradientButton(
-                text = "Mover para o Lixo · 2,3 GB",
-                onClick = {},
+                text = "Mover para o Lixo · ${NexusFormatters.formatBytes(totalSelectedBytes)}",
+                enabled = hasSelection,
+                onClick = {
+                    showConfirmTrashSheet = true
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -1016,10 +1639,10 @@ private fun StorageLegendDot(label: String, color: Color) {
                 .clip(RoundedCornerShape(2.dp))
                 .background(color)
         )
-        Spacer(modifier = Modifier.width(5.dp))
+        Spacer(modifier = Modifier.width(4.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
             color = colors.textDim
         )
     }
@@ -1052,33 +1675,36 @@ private fun NexusCyanCheckbox(checked: Boolean) {
 }
 
 // ============================================================================
-// 4 · JOGOS + «PREPARAR BOOST» (Exatamente como no mockup)
+// 4 · JOGOS + «PREPARAR BOOST» (Apps/Jogos Reais Instalados no Telemóvel)
 // ============================================================================
-data class GameTilePreview(
-    val code: String,
-    val name: String,
-    val boxTint: Color
-)
-
 @Composable
-private fun GamesScreenPreview(
-    onStartBoost: () -> Unit
+private fun RealGamesScreen(
+    snapshot: RealSystemSnapshot,
+    boostSession: BoostSessionState,
+    hasDndPermission: Boolean,
+    onStartBoost: (String, String, String, Boolean, Boolean, Boolean) -> Unit,
+    onOpenActiveSession: () -> Unit
 ) {
     val colors = NexusTheme.colors
-    val games = remember {
-        listOf(
-            GameTilePreview("GI", "Genshin Impact", Color(0xFF231F3A)),
-            GameTilePreview("PUBG", "PUBG Mobile", Color(0xFF2B261C)),
-            GameTilePreview("CR", "Clash Royale", Color(0xFF192738)),
-            GameTilePreview("BS", "Brawl Stars", Color(0xFF2C1F26)),
-            GameTilePreview("FF", "Free Fire", Color(0xFF2A1D21)),
-            GameTilePreview("FC", "EA FC Mobile", Color(0xFF182B29))
-        )
+    val context = LocalContext.current
+
+    // Mostra primeiro os jogos detetados (CATEGORY_GAME); se o telemóvel tiver menos de 6 jogos, completa com as apps instaladas reais!
+    val realTiles = remember(snapshot.installedApps) {
+        val detectedGames = snapshot.installedApps.filter { it.isGame }
+        val others = snapshot.installedApps.filter { !it.isGame }
+        (detectedGames + others).take(6)
     }
-    var selectedGame by remember { mutableStateOf(games.first()) }
+
+    var selectedApp by remember(realTiles) {
+        mutableStateOf(realTiles.firstOrNull())
+    }
     var dndEnabled by remember { mutableStateOf(true) }
     var stopBackgroundApps by remember { mutableStateOf(true) }
     var thermalWarning by remember { mutableStateOf(true) }
+
+    val tempText = snapshot.battery.temperatureCelsius?.let {
+        String.format(Locale("pt", "PT"), "bateria %.1f °C", it)
+    } ?: "bateria N/D"
 
     Column(
         modifier = Modifier
@@ -1087,47 +1713,80 @@ private fun GamesScreenPreview(
             .padding(horizontal = 18.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // Grelha 3x2 de jogos
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            games.chunked(3).forEach { rowGames ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (boostSession.isActive) {
+                NexusCard(
+                    backgroundColor = colors.surfaceAlt,
+                    borderColor = colors.ok,
+                    onClick = onOpenActiveSession
                 ) {
-                    rowGames.forEach { game ->
-                        val isSelected = game.code == selectedGame.code
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable { selectedGame = game },
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "● Boost ativo: ${boostSession.gameName} (${boostSession.formattedElapsed})",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colors.ok
+                        )
+                        Text("Abrir", style = NexusMonoTextStyles.badge, color = colors.accent2)
+                    }
+                }
+            }
+
+            if (realTiles.isEmpty()) {
+                NexusCard(backgroundColor = colors.surface, borderColor = colors.border) {
+                    Text(
+                        text = "A carregar aplicações instaladas no telemóvel...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.textDim
+                    )
+                }
+            } else {
+                realTiles.chunked(3).forEach { rowApps ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        rowApps.forEach { app ->
+                            val isSelected = app.packageName == selectedApp?.packageName
+                            Column(
                                 modifier = Modifier
-                                    .size(76.dp)
-                                    .clip(RoundedCornerShape(18.dp))
-                                    .background(game.boxTint)
-                                    .border(
-                                        width = if (isSelected) 1.5.dp else 1.dp,
-                                        color = if (isSelected) colors.accent else colors.border,
-                                        shape = RoundedCornerShape(18.dp)
-                                    ),
-                                contentAlignment = Alignment.Center
+                                    .weight(1f)
+                                    .clickable { selectedApp = app },
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(76.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(colors.surface)
+                                        .border(
+                                            width = if (isSelected) 1.5.dp else 1.dp,
+                                            color = if (isSelected) colors.accent else colors.border,
+                                            shape = RoundedCornerShape(18.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AppIconOrMonogram(
+                                        packageName = app.packageName,
+                                        monogram = app.monogram,
+                                        iconSizeDp = 42
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = game.code,
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = colors.textDim
+                                    text = app.appName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isSelected) colors.text else colors.textDim,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = game.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.textDim,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        }
+                        repeat(3 - rowApps.size) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -1136,13 +1795,13 @@ private fun GamesScreenPreview(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Folha inferior «Preparar boost»
+        // Folha inferior «Preparar boost» com dados térmicos reais
+        val target = selectedApp
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.borderStrong,
             contentPadding = PaddingValues(16.dp)
         ) {
-            // Barra de arrasto da folha inferior
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1163,15 +1822,19 @@ private fun GamesScreenPreview(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(selectedGame.boxTint)
+                        .background(colors.surfaceAlt)
                         .border(1.dp, colors.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = selectedGame.code,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = colors.text
-                    )
+                    if (target != null) {
+                        AppIconOrMonogram(
+                            packageName = target.packageName,
+                            monogram = target.monogram,
+                            iconSizeDp = 28
+                        )
+                    } else {
+                        Text("JG", style = MaterialTheme.typography.labelLarge, color = colors.text)
+                    }
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
@@ -1181,9 +1844,11 @@ private fun GamesScreenPreview(
                         color = colors.accent
                     )
                     Text(
-                        text = selectedGame.name,
+                        text = target?.appName ?: "Seleciona uma app",
                         style = MaterialTheme.typography.titleLarge,
-                        color = colors.text
+                        color = colors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1192,14 +1857,28 @@ private fun GamesScreenPreview(
 
             NexusToggleRow(
                 title = "Não incomodar",
-                subtitle = "Silencia notificações durante o jogo",
-                checked = dndEnabled,
-                onCheckedChange = { dndEnabled = it }
+                subtitle = if (hasDndPermission) {
+                    "Silencia notificações durante o jogo"
+                } else {
+                    "Toque para autorizar acesso ao Não incomodar"
+                },
+                checked = dndEnabled && hasDndPermission,
+                onCheckedChange = { want ->
+                    if (!hasDndPermission) {
+                        openDndPolicySettings(context)
+                    } else {
+                        dndEnabled = want
+                    }
+                }
             )
             NexusToggleRow(
                 title = "Parar apps em fundo",
-                subtitle = "Só as que o Android permite",
-                checked = stopBackgroundApps,
+                subtitle = if (BuildConfig.IS_FULL_FLAVOR) {
+                    "Só as que o Android permite (killBackgroundProcesses)"
+                } else {
+                    "Disponível na variante Full"
+                },
+                checked = stopBackgroundApps && BuildConfig.IS_FULL_FLAVOR,
                 onCheckedChange = { stopBackgroundApps = it }
             )
             NexusToggleRow(
@@ -1211,7 +1890,7 @@ private fun GamesScreenPreview(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Barra de estado térmico atual
+            // Barra de estado térmico real medido agora
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1227,17 +1906,19 @@ private fun GamesScreenPreview(
                         modifier = Modifier
                             .size(7.dp)
                             .clip(CircleShape)
-                            .background(colors.ok)
+                            .background(
+                                if (snapshot.thermal.level.severityRank <= 0) colors.ok else colors.warn
+                            )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Estado térmico: Normal",
+                        text = "Estado térmico: ${snapshot.thermal.level.labelPt}",
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.text
                     )
                 }
                 Text(
-                    text = "bateria 31 °C",
+                    text = tempText,
                     style = NexusMonoTextStyles.metricSmall.copy(fontSize = 12.sp),
                     color = colors.textDim
                 )
@@ -1247,21 +1928,86 @@ private fun GamesScreenPreview(
 
             NexusPrimaryGradientButton(
                 text = "Boost e jogar",
-                onClick = onStartBoost,
+                enabled = target != null,
+                onClick = {
+                    if (target != null) {
+                        onStartBoost(
+                            target.packageName,
+                            target.appName,
+                            target.monogram,
+                            dndEnabled && hasDndPermission,
+                            stopBackgroundApps,
+                            false // Abre primeiro o ecrã de sessão ativa com opção de abrir o jogo externo
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         }
     }
 }
 
+@Composable
+private fun AppIconOrMonogram(
+    packageName: String,
+    monogram: String,
+    iconSizeDp: Int
+) {
+    val context = LocalContext.current
+    val colors = NexusTheme.colors
+    val bitmap = remember(packageName) {
+        try {
+            val drawable = context.packageManager.getApplicationIcon(packageName)
+            drawableToBitmap(drawable, 128)
+        } catch (_: Exception) {
+            null
+        }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = monogram,
+            modifier = Modifier
+                .size(iconSizeDp.dp)
+                .clip(RoundedCornerShape(10.dp))
+        )
+    } else {
+        Text(
+            text = monogram,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            color = colors.textDim
+        )
+    }
+}
+
+private fun drawableToBitmap(drawable: Drawable, sizePx: Int): Bitmap {
+    if (drawable is BitmapDrawable && drawable.bitmap != null) {
+        return drawable.bitmap
+    }
+    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bmp)
+    drawable.setBounds(0, 0, canvas.width, canvas.height)
+    drawable.draw(canvas)
+    return bmp
+}
+
 // ============================================================================
-// 5 · SESSÃO ATIVA + NOTIFICAÇÃO (Exatamente como no mockup)
+// 5 · SESSÃO ATIVA + NOTIFICAÇÃO (Cronómetro Real + Gráfico Térmico Real 60s)
 // ============================================================================
 @Composable
-private fun ActiveBoostSessionScreenPreview(
+private fun RealActiveBoostScreen(
+    snapshot: RealSystemSnapshot,
+    boostSession: BoostSessionState,
     onStopBoost: () -> Unit
 ) {
     val colors = NexusTheme.colors
+    val context = LocalContext.current
+    val liveTemp = boostSession.currentTempCelsius ?: snapshot.battery.temperatureCelsius
+    val tempLabel = liveTemp?.let {
+        String.format(Locale("pt", "PT"), "%.1f °C", it)
+    } ?: "N/D"
+    val dndStatusText = if (boostSession.dndEnabled) "Não incomodar ligado" else "Não incomodar desligado"
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1270,7 +2016,7 @@ private fun ActiveBoostSessionScreenPreview(
             .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Cartão da notificação contínua em primeiro plano
+        // Cartão da notificação em primeiro plano ativa
         NexusCard(
             backgroundColor = colors.surfaceAlt,
             borderColor = colors.borderStrong,
@@ -1280,7 +2026,7 @@ private fun ActiveBoostSessionScreenPreview(
                 GaugeShieldLogo(size = 18.dp, withContainer = false)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Nexus Guard · agora",
+                    text = "Nexus Guard · agora (Serviço ativo)",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textDim
                 )
@@ -1292,32 +2038,51 @@ private fun ActiveBoostSessionScreenPreview(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Boost ativo · Genshin Impact",
+                    text = "Boost ativo · ${boostSession.gameName.ifBlank { "Sessão" }}",
                     style = MaterialTheme.typography.titleMedium,
-                    color = colors.text
+                    color = colors.text,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "00:42:10",
+                    text = boostSession.formattedElapsed,
                     style = NexusMonoTextStyles.metricSmall,
                     color = colors.textDim
                 )
             }
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = "Bateria 38 °C · Térmico: Ligeiro · Não incomodar ligado",
+                text = "Bateria $tempLabel · Térmico: ${boostSession.currentThermalLevel.labelPt} · $dndStatusText",
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.textDim
             )
             Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "TERMINAR",
-                style = NexusMonoTextStyles.badge.copy(fontSize = 12.sp),
-                color = colors.accent2,
-                modifier = Modifier.clickable(onClick = onStopBoost)
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    text = "TERMINAR",
+                    style = NexusMonoTextStyles.badge.copy(fontSize = 12.sp),
+                    color = colors.accent2,
+                    modifier = Modifier.clickable(onClick = onStopBoost)
+                )
+                if (boostSession.gamePackage.isNotBlank()) {
+                    Text(
+                        text = "ABRIR JOGO",
+                        style = NexusMonoTextStyles.badge.copy(fontSize = 12.sp),
+                        color = colors.ok,
+                        modifier = Modifier.clickable {
+                            val launch = context.packageManager.getLaunchIntentForPackage(boostSession.gamePackage)
+                            if (launch != null) {
+                                context.startActivity(launch)
+                            }
+                        }
+                    )
+                }
+            }
         }
 
-        // Cronómetro central da sessão ativa
+        // Cronómetro central ao vivo
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1340,19 +2105,19 @@ private fun ActiveBoostSessionScreenPreview(
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Genshin Impact",
+                text = boostSession.gameName.ifBlank { "Jogo em execução" },
                 style = MaterialTheme.typography.titleLarge,
                 color = colors.text
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "00:42:10",
+                text = boostSession.formattedElapsed,
                 style = NexusMonoTextStyles.metricHero.copy(fontSize = 44.sp),
                 color = colors.text
             )
         }
 
-        // Gráfico térmico de 60 s ao vivo
+        // Gráfico térmico de 60 s ao vivo com dados reais da bateria
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border,
@@ -1369,16 +2134,16 @@ private fun ActiveBoostSessionScreenPreview(
                     color = colors.textDim
                 )
                 Text(
-                    text = "38 °C",
+                    text = tempLabel,
                     style = NexusMonoTextStyles.metricMedium,
-                    color = colors.warn
+                    color = if ((liveTemp ?: 30f) >= 38f) colors.warn else colors.ok
                 )
             }
             Spacer(modifier = Modifier.height(12.dp))
-            LiveThermal60sBars()
+            RealLiveThermal60sBars(tempHistory = snapshot.tempHistory60s)
         }
 
-        // Grelha 2x2 de estatísticas da sessão
+        // Grelha 2x2 real da sessão
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1386,12 +2151,12 @@ private fun ActiveBoostSessionScreenPreview(
             SessionMetricBox(
                 modifier = Modifier.weight(1f),
                 label = "Pior estado térmico",
-                value = "Ligeiro"
+                value = boostSession.worstThermalLevel.labelPt
             )
             SessionMetricBox(
                 modifier = Modifier.weight(1f),
                 label = "Bateria gasta",
-                value = "11 %"
+                value = "${boostSession.batteryUsedPercent} %"
             )
         }
 
@@ -1402,18 +2167,17 @@ private fun ActiveBoostSessionScreenPreview(
             SessionMetricBox(
                 modifier = Modifier.weight(1f),
                 label = "Não incomodar",
-                value = "Ligado"
+                value = if (boostSession.dndEnabled) "Ligado" else "Desligado"
             )
             SessionMetricBox(
                 modifier = Modifier.weight(1f),
                 label = "Apps paradas",
-                value = "4"
+                value = boostSession.appsStoppedCount.toString()
             )
         }
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Botão Terminar boost
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1435,13 +2199,16 @@ private fun ActiveBoostSessionScreenPreview(
 }
 
 @Composable
-private fun LiveThermal60sBars() {
+private fun RealLiveThermal60sBars(tempHistory: List<Float>) {
     val colors = NexusTheme.colors
-    val heights = listOf(
-        0.55f, 0.56f, 0.58f, 0.60f, 0.58f, 0.54f, 0.52f, 0.55f, 0.62f, 0.68f,
-        0.74f, 0.78f, 0.75f, 0.70f, 0.65f, 0.64f, 0.66f, 0.72f, 0.76f, 0.80f,
-        0.82f, 0.79f, 0.74f, 0.68f, 0.66f, 0.64f, 0.62f, 0.60f
-    )
+    val bars = remember(tempHistory) {
+        val list = tempHistory.takeLast(28)
+        if (list.size < 28) {
+            List(28 - list.size) { list.firstOrNull() ?: 30f } + list
+        } else {
+            list
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1449,13 +2216,20 @@ private fun LiveThermal60sBars() {
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.Bottom
     ) {
-        heights.forEach { h ->
+        bars.forEach { tempC ->
+            // Mapeia 20 °C..50 °C para 0.20..1.00
+            val normalized = ((tempC - 18f) / 32f).coerceIn(0.20f, 1.0f)
+            val barColor = when {
+                tempC >= 42f -> colors.danger
+                tempC >= 36f -> colors.warn
+                else -> colors.ok
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxHeight(h)
+                    .fillMaxHeight(normalized)
                     .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp))
-                    .background(colors.warn.copy(alpha = 0.85f))
+                    .background(barColor.copy(alpha = 0.85f))
             )
         }
     }
@@ -1489,14 +2263,24 @@ private fun SessionMetricBox(
 }
 
 // ============================================================================
-// SEPARADOR SISTEMA + HISTÓRICO + DEFINIÇÕES
+// SEPARADOR SISTEMA (Temperaturas ao vivo 60s + RAM + Apps Instaladas Reais)
 // ============================================================================
 @Composable
-private fun SystemScreenPreview(
+private fun RealSystemScreen(
+    snapshot: RealSystemSnapshot,
+    onRefresh: () -> Unit,
+    onStopPermittedBackground: ((Int) -> Unit) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenHistory: () -> Unit
 ) {
     val colors = NexusTheme.colors
+    val context = LocalContext.current
+    val tempLabel = snapshot.battery.temperatureCelsius?.let {
+        String.format(Locale("pt", "PT"), "%.1f °C", it)
+    } ?: "N/D"
+    val availRamGb = NexusFormatters.formatBytes(snapshot.availableRamBytes)
+    val totalRamGb = NexusFormatters.formatBytes(snapshot.totalRamBytes)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1504,6 +2288,7 @@ private fun SystemScreenPreview(
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Gráfico térmico de 60 s ao vivo
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border,
@@ -1515,35 +2300,169 @@ private fun SystemScreenPreview(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Temperatura da bateria · 60 s",
+                    text = "Temperatura da bateria · 60 s ao vivo",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textDim
                 )
                 Text(
-                    text = "31 °C · Normal",
+                    text = "$tempLabel · ${snapshot.thermal.level.labelPt}",
                     style = NexusMonoTextStyles.metricSmall,
                     color = colors.ok
                 )
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            LiveThermal60sBars()
-        }
-
-        NexusCard(
-            backgroundColor = colors.surface,
-            borderColor = colors.border
-        ) {
-            Text(
-                text = "Apps em fundo e sem uso",
-                style = MaterialTheme.typography.titleMedium,
-                color = colors.text
-            )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Monitorização via UsageStatsManager e ActivityManager.MemoryInfo com ações Parar, Desinstalar e Restringir bateria.",
+                text = "Margem térmica: ${snapshot.thermal.headroomText} · CPU: bloqueado pelo Android sem root",
                 style = MaterialTheme.typography.bodySmall,
-                color = colors.textDim
+                color = colors.textMuted
             )
+            Spacer(modifier = Modifier.height(10.dp))
+            RealLiveThermal60sBars(tempHistory = snapshot.tempHistory60s)
+        }
+
+        // Memória RAM Real (ActivityManager.MemoryInfo)
+        NexusCard(
+            backgroundColor = colors.surface,
+            borderColor = colors.border,
+            contentPadding = PaddingValues(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Memória RAM disponível",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.text
+                    )
+                    Text(
+                        text = "$availRamGb livres de $totalRamGb (ActivityManager.MemoryInfo)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textDim
+                    )
+                }
+                if (BuildConfig.IS_FULL_FLAVOR) {
+                    Text(
+                        text = "Limpar fundo",
+                        style = NexusMonoTextStyles.badge,
+                        color = colors.accent2,
+                        modifier = Modifier.clickable {
+                            onStopPermittedBackground { count ->
+                                Toast.makeText(
+                                    context,
+                                    "killBackgroundProcesses executado em $count apps em fundo.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // Permissão UsageStats se ainda não concedida
+        if (!snapshot.hasUsageStatsPermission) {
+            NexusCard(
+                backgroundColor = colors.surfaceAlt,
+                borderColor = colors.warn,
+                contentPadding = PaddingValues(14.dp)
+            ) {
+                Text(
+                    text = "Permissão de Acesso ao Uso (PACKAGE_USAGE_STATS)",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.text
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Concede acesso para medir há quantos dias não usas cada app e o espaço exato ocupado (StorageStatsManager).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textDim
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                NexusPrimaryGradientButton(
+                    text = "Conceder Acesso ao Uso",
+                    onClick = { openUsageAccessSettings(context) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        // Lista de Apps instaladas reais com ações Parar, Desinstalar e Bateria
+        Text(
+            text = "Apps instaladas (${snapshot.installedApps.size}) · ordenadas por tamanho",
+            style = MaterialTheme.typography.labelLarge,
+            color = colors.textDim
+        )
+
+        snapshot.installedApps.take(25).forEach { app ->
+            NexusCard(
+                backgroundColor = colors.surface,
+                borderColor = colors.border,
+                contentPadding = PaddingValues(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        AppIconOrMonogram(
+                            packageName = app.packageName,
+                            monogram = app.monogram,
+                            iconSizeDp = 36
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = app.appName,
+                                style = MaterialTheme.typography.titleMedium.copy(fontSize = 14.sp),
+                                color = colors.text,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            val usageNote = if (snapshot.hasUsageStatsPermission) {
+                                if (app.isUnused30Days) "Sem uso há ${app.daysSinceUse} d" else "Usada há ${app.daysSinceUse} d"
+                            } else {
+                                app.packageName
+                            }
+                            Text(
+                                text = "${NexusFormatters.formatBytes(app.totalSizeBytes)} · $usageNote",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (app.isUnused30Days) colors.warn else colors.textMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Parar / Bateria",
+                        style = NexusMonoTextStyles.badge,
+                        color = colors.accent2,
+                        modifier = Modifier.clickable {
+                            openAppDetailsSettings(context, app.packageName)
+                        }
+                    )
+                    Text(
+                        text = "Desinstalar",
+                        style = NexusMonoTextStyles.badge,
+                        color = colors.danger,
+                        modifier = Modifier.clickable {
+                            requestUninstallPackage(context, app.packageName)
+                        }
+                    )
+                }
+            }
         }
 
         Row(
@@ -1557,7 +2476,7 @@ private fun SystemScreenPreview(
                     .weight(1f)
                     .defaultMinSize(minHeight = 48.dp)
             ) {
-                Text("Ver Histórico", color = colors.text)
+                Text("Histórico", color = colors.text)
             }
             OutlinedButton(
                 onClick = onOpenSettings,
@@ -1572,9 +2491,45 @@ private fun SystemScreenPreview(
     }
 }
 
+// ============================================================================
+// HISTÓRICO REAL (Room + Restauro do Lixo + Exportação PDF)
+// ============================================================================
 @Composable
-private fun HistoryScreenPreview() {
+private fun RealHistoryScreen(
+    entries: List<HistoryEntity>,
+    buildRestoreIntent: (HistoryEntity) -> android.content.IntentSender?,
+    onRestoreConfirmed: (Long) -> Unit,
+    onExportPdf: (Uri, (Boolean) -> Unit) -> Unit
+) {
     val colors = NexusTheme.colors
+    val context = LocalContext.current
+    var pendingRestoreId by remember { mutableStateOf<Long?>(null) }
+
+    val restoreLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { res ->
+        val id = pendingRestoreId
+        if (res.resultCode == Activity.RESULT_OK && id != null) {
+            onRestoreConfirmed(id)
+            Toast.makeText(context, "Ficheiros restaurados do Lixo do sistema!", Toast.LENGTH_SHORT).show()
+        }
+        pendingRestoreId = null
+    }
+
+    val pdfExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        if (uri != null) {
+            onExportPdf(uri) { ok ->
+                Toast.makeText(
+                    context,
+                    if (ok) "Relatório PDF exportado com sucesso!" else "Erro ao exportar PDF.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1582,38 +2537,265 @@ private fun HistoryScreenPreview() {
             .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        NexusPrimaryGradientButton(
+            text = "Exportar Histórico em PDF",
+            leadingIcon = Icons.Outlined.PictureAsPdf,
+            onClick = {
+                pdfExportLauncher.launch("NexusGuard-Historico.pdf")
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        if (entries.isEmpty()) {
+            NexusCard(
+                backgroundColor = colors.surface,
+                borderColor = colors.border
+            ) {
+                Text(
+                    text = "Histórico vazio",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.text
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Todas as análises, limpezas e sessões de Boost que executares no telemóvel serão gravadas aqui na base de dados local (Room).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textDim
+                )
+            }
+        } else {
+            entries.forEach { entry ->
+                NexusCard(
+                    backgroundColor = colors.surface,
+                    borderColor = colors.border
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = entry.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colors.text,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = NexusFormatters.formatRelativeTimePt(entry.timestampEpochMillis),
+                            style = NexusMonoTextStyles.metricSmall,
+                            color = colors.textMuted
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = entry.details,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textDim
+                    )
+                    if (entry.canRestore && !entry.isRestored) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val sender = buildRestoreIntent(entry)
+                                if (sender != null) {
+                                    pendingRestoreId = entry.id
+                                    restoreLauncher.launch(IntentSenderRequest.Builder(sender).build())
+                                }
+                            },
+                            shape = NexusButtonShape
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.RestoreFromTrash,
+                                contentDescription = null,
+                                tint = colors.accent2,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Restaurar do Lixo do sistema", color = colors.text)
+                        }
+                    } else if (entry.isRestored) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("✓ Restaurado do Lixo do sistema", style = NexusMonoTextStyles.badge, color = colors.ok)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// DEFINIÇÕES REAIS (Tema, Notificações, Agendamento, Permissões e Licença)
+// ============================================================================
+@Composable
+private fun RealSettingsScreen(
+    preferences: UserPreferencesState,
+    snapshot: RealSystemSnapshot,
+    cleanReport: CleanScanReport,
+    hasDndPermission: Boolean,
+    onToggleDarkTheme: (Boolean) -> Unit,
+    onToggleWeeklyScan: (Boolean) -> Unit,
+    onToggleStorageAlert: (Boolean) -> Unit,
+    onToggleThermalAlert: (Boolean) -> Unit,
+    onToggleBatteryAlert: (Boolean) -> Unit,
+    onReopenOnboarding: () -> Unit
+) {
+    val colors = NexusTheme.colors
+    val context = LocalContext.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        NexusCard(
+            backgroundColor = colors.surface,
+            borderColor = colors.border
+        ) {
+            NexusToggleRow(
+                title = "Tema escuro (NexusTheme)",
+                subtitle = "Ativo por omissão (#0C0F16). O tema claro é opcional.",
+                checked = preferences.darkThemeEnabled,
+                onCheckedChange = onToggleDarkTheme
+            )
+            HorizontalDivider(color = colors.border)
+            NexusToggleRow(
+                title = "Análise semanal agendada (WorkManager)",
+                subtitle = "Executa verificação em segundo plano 1x por semana",
+                checked = preferences.weeklyScanEnabled,
+                onCheckedChange = onToggleWeeklyScan
+            )
+            HorizontalDivider(color = colors.border)
+            NexusToggleRow(
+                title = "Notificação: Armazenamento < 10 %",
+                subtitle = "Canal dedicado de alerta de armazenamento",
+                checked = preferences.storageAlertEnabled,
+                onCheckedChange = onToggleStorageAlert
+            )
+            HorizontalDivider(color = colors.border)
+            NexusToggleRow(
+                title = "Notificação: Telemóvel quente",
+                subtitle = "Avisa quando o estado térmico chega a Grave ou Crítico",
+                checked = preferences.thermalAlertEnabled,
+                onCheckedChange = onToggleThermalAlert
+            )
+            HorizontalDivider(color = colors.border)
+            NexusToggleRow(
+                title = "Notificação: Bateria degradada",
+                subtitle = "Avisa se a saúde da bateria deixar de ser Boa",
+                checked = preferences.batteryAlertEnabled,
+                onCheckedChange = onToggleBatteryAlert
+            )
+        }
+
+        // Painel de Permissões Concedidas em tempo real
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border
         ) {
             Text(
-                text = "Limpeza · 1,4 GB para o Lixo",
+                text = "Estado das Permissões no Telemóvel",
                 style = MaterialTheme.typography.titleMedium,
                 color = colors.text
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Ontem · Quarentena ativa no Lixo do sistema (restaurável)",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.textDim
+            Spacer(modifier = Modifier.height(8.dp))
+            PermissionStatusRow(
+                label = "Acesso ao Uso (PACKAGE_USAGE_STATS)",
+                granted = snapshot.hasUsageStatsPermission,
+                onAction = { openUsageAccessSettings(context) }
             )
+            PermissionStatusRow(
+                label = "Leitura de Media (MediaStore)",
+                granted = cleanReport.hasMediaPermission,
+                onAction = { openAppDetailsSettings(context, context.packageName) }
+            )
+            PermissionStatusRow(
+                label = "Política Não Incomodar (Modo Jogo)",
+                granted = hasDndPermission,
+                onAction = { openDndPolicySettings(context) }
+            )
+            if (BuildConfig.IS_FULL_FLAVOR && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                PermissionStatusRow(
+                    label = "Todos os ficheiros (MANAGE_EXTERNAL_STORAGE)",
+                    granted = cleanReport.hasManageStoragePermission,
+                    onAction = { openManageAllFilesSettings(context) }
+                )
+            }
         }
+
         NexusCard(
             backgroundColor = colors.surface,
             borderColor = colors.border
         ) {
             Text(
-                text = "Boost · Genshin Impact 1 h 05",
+                text = "Distribuição, Privacidade e Licença",
                 style = MaterialTheme.typography.titleMedium,
                 color = colors.text
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Variante ativa: ${BuildConfig.FLAVOR_LABEL} (${BuildConfig.VERSION_NAME})",
+                style = NexusMonoTextStyles.metricSmall,
+                color = colors.accent2
+            )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Ontem · Temp. máx. 38 °C · Pior estado: Ligeiro",
+                text = "100 % local: sem analytics, sem anúncios e sem permissão de INTERNET. Fontes: JetBrains Mono (OFL) e Roboto Flex.",
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.textDim
             )
         }
+
+        OutlinedButton(
+            onClick = onReopenOnboarding,
+            shape = NexusButtonShape,
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Info,
+                contentDescription = null,
+                tint = colors.accent2,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Abrir Onboarding com os Princípios",
+                color = colors.text
+            )
+        }
+    }
+}
+
+@Composable
+private fun PermissionStatusRow(
+    label: String,
+    granted: Boolean,
+    onAction: () -> Unit
+) {
+    val colors = NexusTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textDim,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = if (granted) "Concedida" else "Conceder",
+            style = NexusMonoTextStyles.badge,
+            color = if (granted) colors.ok else colors.accent2,
+            modifier = Modifier.clickable(onClick = onAction)
+        )
     }
 }
 
@@ -1659,104 +2841,91 @@ private fun NexusToggleRow(
     }
 }
 
-@Composable
-private fun Phase1SettingsScreen(
-    darkThemeEnabled: Boolean,
-    onToggleDarkTheme: (Boolean) -> Unit,
-    onReopenOnboarding: () -> Unit
-) {
-    val colors = NexusTheme.colors
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        NexusCard(
-            backgroundColor = colors.surface,
-            borderColor = colors.border
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.DarkMode,
-                        contentDescription = null,
-                        tint = colors.accent2
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "Tema escuro (NexusTheme)",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = colors.text
-                        )
-                        Text(
-                            text = "Ativo por omissão (#0C0F16). O tema claro é opcional.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.textDim
-                        )
-                    }
-                }
-                Switch(
-                    checked = darkThemeEnabled,
-                    onCheckedChange = onToggleDarkTheme,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = colors.accent
-                    )
-                )
+// ============================================================================
+// INTENTS NATIVOS DO ANDROID
+// ============================================================================
+private fun openUsageAccessSettings(context: Context) {
+    try {
+        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+    } catch (_: Exception) {
+    }
+}
+
+private fun openDndPolicySettings(context: Context) {
+    try {
+        context.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+    } catch (_: Exception) {
+    }
+}
+
+private fun openManageAllFilesSettings(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        try {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (_: Exception) {
             }
         }
+    }
+}
 
-        NexusCard(
-            backgroundColor = colors.surface,
-            borderColor = colors.border
-        ) {
-            Text(
-                text = "Distribuição e Flavor",
-                style = MaterialTheme.typography.titleMedium,
-                color = colors.text
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Variante ativa: ${BuildConfig.FLAVOR_LABEL} (${BuildConfig.VERSION_NAME})",
-                style = NexusMonoTextStyles.metricSmall,
-                color = colors.accent2
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Sem analytics, sem anúncios e sem permissão de INTERNET.",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.textDim
-            )
+private fun openSystemClearCacheAction(context: Context) {
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.startActivity(Intent(StorageManager.ACTION_CLEAR_APP_CACHE).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        } else {
+            context.startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
         }
+    } catch (_: Exception) {
+        try {
+            context.startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        } catch (_: Exception) {
+        }
+    }
+}
 
-        OutlinedButton(
-            onClick = onReopenOnboarding,
-            shape = NexusButtonShape,
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Info,
-                contentDescription = null,
-                tint = colors.accent2,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Abrir Onboarding com os Princípios",
-                color = colors.text
-            )
-        }
+private fun openAppDetailsSettings(context: Context, packageName: String) {
+    try {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    } catch (_: Exception) {
+    }
+}
+
+private fun requestUninstallPackage(context: Context, packageName: String) {
+    try {
+        context.startActivity(
+            Intent(
+                Intent.ACTION_DELETE,
+                Uri.parse("package:$packageName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    } catch (_: Exception) {
     }
 }

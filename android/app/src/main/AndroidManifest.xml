@@ -55,6 +55,15 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".service.GameBoostForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="game_boost_thermal_and_dnd_monitor" />
+        </service>
+
         <!-- Desativa inicializador automático do WorkManager para suportar HiltWorkerFactory -->
         <provider
             android:name="androidx.startup.InitializationProvider"

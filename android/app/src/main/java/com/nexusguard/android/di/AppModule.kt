@@ -5,6 +5,9 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
+import androidx.room.Room
+import com.nexusguard.android.data.local.NexusGuardDao
+import com.nexusguard.android.data.local.NexusGuardDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -24,5 +27,23 @@ object AppModule {
         return PreferenceDataStoreFactory.create(
             produceFile = { context.preferencesDataStoreFile("nexus_guard_prefs") }
         )
+    }
+
+    @Provides
+    @Singleton
+    fun provideDatabase(
+        @ApplicationContext context: Context
+    ): NexusGuardDatabase {
+        return Room.databaseBuilder(
+            context,
+            NexusGuardDatabase::class.java,
+            "nexus_guard_history.db"
+        ).fallbackToDestructiveMigration(true).build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideDao(database: NexusGuardDatabase): NexusGuardDao {
+        return database.dao()
     }
 }
