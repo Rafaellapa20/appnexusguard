@@ -537,16 +537,8 @@ private fun RealHomeScreen(
         ThermalLevelPt.GRAVE, ThermalLevelPt.CRITICO -> colors.danger
     }
 
-    val unusedValueText = if (snapshot.hasUsageStatsPermission) {
-        snapshot.unusedAppsCount.toString()
-    } else {
-        "Ativar"
-    }
-    val unusedSubtitleText = if (snapshot.hasUsageStatsPermission) {
-        "> 30 dias (${snapshot.installedApps.size} apps lidas)"
-    } else {
-        "toque para UsageStats"
-    }
+    val unusedValueText = snapshot.unusedAppsCount.toString()
+    val unusedSubtitleText = "> 30 dias (${snapshot.installedApps.size} apps)"
 
     Column(
         modifier = Modifier
@@ -753,18 +745,12 @@ private fun RealHomeScreen(
             )
             HomeStatusCard(
                 modifier = Modifier.weight(1f),
-                dotColor = if (snapshot.unusedAppsCount > 0 || !snapshot.hasUsageStatsPermission) colors.warn else colors.ok,
+                dotColor = if (snapshot.unusedAppsCount > 0) colors.warn else colors.ok,
                 label = "Apps sem uso",
                 value = unusedValueText,
                 subtitle = unusedSubtitleText,
-                useMonoFont = snapshot.hasUsageStatsPermission,
-                onClick = {
-                    if (!snapshot.hasUsageStatsPermission) {
-                        openUsageAccessSettings(context)
-                    } else {
-                        onOpenSystem()
-                    }
-                }
+                useMonoFont = true,
+                onClick = onOpenSystem
             )
         }
 
@@ -1051,18 +1037,12 @@ private fun RealBatteryScreen(
             )
         }
 
-        // Banner inferior real: apps em fundo / UsageStats
+        // Banner inferior real: apps em fundo / sem uso
         NexusCard(
             backgroundColor = Color(0xFF1F1B16),
             borderColor = colors.warn.copy(alpha = 0.45f),
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
-            onClick = {
-                if (!snapshot.hasUsageStatsPermission) {
-                    openUsageAccessSettings(context)
-                } else {
-                    onViewBackgroundApps()
-                }
-            }
+            onClick = onViewBackgroundApps
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1081,18 +1061,14 @@ private fun RealBatteryScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (snapshot.hasUsageStatsPermission) {
-                            "${snapshot.highBackgroundAppsCount} app(s) com atividade relevante · ${snapshot.unusedAppsCount} sem uso (>30d)"
-                        } else {
-                            "Autoriza o acesso ao uso para ver as apps que mais gastam bateria"
-                        },
+                        text = "${snapshot.highBackgroundAppsCount} app(s) ativas · ${snapshot.unusedAppsCount} sem uso (>30d)",
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.text
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (snapshot.hasUsageStatsPermission) "Ver" else "Autorizar",
+                    text = "Ver",
                     style = MaterialTheme.typography.labelLarge,
                     color = colors.warn
                 )
@@ -2392,27 +2368,38 @@ private fun RealSystemScreen(
             }
         }
 
-        // Permissão UsageStats se ainda não concedida
+        // Atalho fácil de 2 botões (opcional) se o utilizador quiser desbloquear UsageStats no Android 13+
         if (!snapshot.hasUsageStatsPermission) {
             NexusCard(
                 backgroundColor = colors.surfaceAlt,
-                borderColor = colors.warn,
+                borderColor = colors.borderStrong,
                 contentPadding = PaddingValues(14.dp)
             ) {
                 Text(
-                    text = "Permissão de Acesso ao Uso (PACKAGE_USAGE_STATS)",
+                    text = "Opcional: Detalhe de Cache por App (Android 13+)",
                     style = MaterialTheme.typography.titleMedium,
                     color = colors.text
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Concede acesso para medir há quantos dias não usas cada app e o espaço exato ocupado (StorageStatsManager).",
+                    text = "As tuas ${snapshot.installedApps.size} apps e tamanhos reais já estão carregados abaixo sem precisares desta permissão! Se quiseres desbloquear as «Definições restritas» do Android em 2 cliques:",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textDim
                 )
                 Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { openAppDetailsSettings(context, context.packageName) },
+                    shape = NexusButtonShape,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "1.º Abrir Info da App (tocar em ⋮ Mais → Permitir)",
+                        color = colors.accent2
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
                 NexusPrimaryGradientButton(
-                    text = "Conceder Acesso ao Uso",
+                    text = "2.º Ativar Dados de Utilização",
                     onClick = { openUsageAccessSettings(context) },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -3110,10 +3097,22 @@ private fun NexusToggleRow(
 // ============================================================================
 private fun openUsageAccessSettings(context: Context) {
     try {
-        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        })
+        // Tenta abrir diretamente na página do Nexus Guard em vez da lista geral
+        context.startActivity(
+            Intent(
+                Settings.ACTION_USAGE_ACCESS_SETTINGS,
+                Uri.parse("package:${context.packageName}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
     } catch (_: Exception) {
+        try {
+            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        } catch (_: Exception) {
+        }
     }
 }
 

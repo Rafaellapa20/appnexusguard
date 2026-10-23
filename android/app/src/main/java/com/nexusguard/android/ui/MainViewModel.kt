@@ -213,17 +213,7 @@ class MainViewModel @Inject constructor(
                 )
             }
 
-            if (!snapshot.hasUsageStatsPermission) {
-                fixes.add(
-                    ProposedFixItem(
-                        id = "usage_perm",
-                        title = "Ativar leitura de apps sem uso (UsageStats)",
-                        subtitle = "Necessário para identificar apps sem uso há > 30 dias e tamanho por app",
-                        requiresSystemConfirmation = true,
-                        actionRouteOrType = "OPEN_USAGE_PERM"
-                    )
-                )
-            } else if (snapshot.unusedAppsCount > 0) {
+            if (snapshot.unusedAppsCount > 0) {
                 fixes.add(
                     ProposedFixItem(
                         id = "unused_apps",

@@ -171,7 +171,11 @@ class SystemSensorsRepository @Inject constructor(
         val usageGranted = hasUsageStatsPermission()
         val apps = readInstalledAppsUsage(usageGranted)
         val unusedApps = apps.filter { it.isUnused30Days }
-        val activeBgApps = apps.filter { it.foregroundTimeMillis > 15 * 60_000L }.take(10)
+        val activeBgApps = if (usageGranted) {
+            apps.filter { it.foregroundTimeMillis > 15 * 60_000L }.take(10)
+        } else {
+            apps.take(10)
+        }
 
         // Atualiza janela deslizante de 60 segundos (30 amostras x 2s)
         battery.temperatureCelsius?.let { temp ->
@@ -503,15 +507,39 @@ class SystemSensorsRepository @Inject constructor(
             val lastUsed = stats?.lastTimeUsed ?: 0L
             val fgTime = stats?.totalTimeInForeground ?: 0L
 
-            val installTime = try {
-                pm.getPackageInfo(appInfo.packageName, 0).firstInstallTime
+            val pkgInfo = try {
+                pm.getPackageInfo(appInfo.packageName, 0)
             } catch (_: Exception) {
-                now
+                null
+            }
+            val firstInstall = pkgInfo?.firstInstallTime ?: now
+            val lastUpdate = pkgInfo?.lastUpdateTime ?: firstInstall
+            val packageTimestamp = maxOf(firstInstall, lastUpdate)
+            val isStopped = (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
+
+            val referenceTime = if (lastUsed > 0L) lastUsed else packageTimestamp
+            val daysSinceUse = ((now - referenceTime).coerceAtLeast(0L) / (24L * 3600_000L)).toInt()
+            val isUnused30Days = if (hasUsagePermission) {
+                referenceTime < thirtyDaysAgo
+            } else {
+                referenceTime < thirtyDaysAgo || (isStopped && daysSinceUse >= 14)
             }
 
-            val referenceTime = if (lastUsed > 0L) lastUsed else installTime
-            val daysSinceUse = ((now - referenceTime).coerceAtLeast(0L) / (24L * 3600_000L)).toInt()
-            val isUnused30Days = hasUsagePermission && referenceTime < thirtyDaysAgo
+            val apkAndSplitsBytes = buildList {
+                appInfo.sourceDir?.let { add(File(it)) }
+                appInfo.splitSourceDirs?.forEach { add(File(it)) }
+            }.sumOf { file -> if (file.exists()) file.length() else 0L }
+
+            val nativeLibsBytes = appInfo.nativeLibraryDir?.let { dirPath ->
+                val dir = File(dirPath)
+                if (dir.exists() && dir.isDirectory) {
+                    dir.listFiles()?.sumOf { it.length() } ?: 0L
+                } else {
+                    0L
+                }
+            } ?: 0L
+
+            val fallbackAppBytes = apkAndSplitsBytes + nativeLibsBytes
 
             val sizeBytes = if (hasUsagePermission && storageStatsManager != null) {
                 try {
@@ -520,12 +548,21 @@ class SystemSensorsRepository @Inject constructor(
                         appInfo.packageName,
                         userHandle
                     )
-                    st.appBytes + st.dataBytes + st.cacheBytes
+                    (st.appBytes + st.dataBytes + st.cacheBytes).coerceAtLeast(fallbackAppBytes)
                 } catch (_: Exception) {
-                    appInfo.sourceDir?.let { File(it).length() } ?: 0L
+                    fallbackAppBytes
                 }
             } else {
-                appInfo.sourceDir?.let { File(it).length() } ?: 0L
+                fallbackAppBytes
+            }
+
+            val effectiveFgMillis = if (hasUsagePermission) {
+                fgTime
+            } else if (!isStopped) {
+                // Sem UsageStats concedida, indica que a app está ativa (não parada) no sistema
+                30 * 60_000L
+            } else {
+                0L
             }
 
             InstalledAppUsageInfo(
@@ -533,8 +570,8 @@ class SystemSensorsRepository @Inject constructor(
                 appName = label,
                 monogram = monogram,
                 isGame = isGame,
-                lastTimeUsedMillis = lastUsed,
-                foregroundTimeMillis = fgTime,
+                lastTimeUsedMillis = referenceTime,
+                foregroundTimeMillis = effectiveFgMillis,
                 daysSinceUse = daysSinceUse,
                 totalSizeBytes = sizeBytes,
                 isUnused30Days = isUnused30Days

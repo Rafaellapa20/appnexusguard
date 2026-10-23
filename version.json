@@ -1,7 +1,7 @@
 {
-  "versionCode": 3,
-  "versionName": "1.2.0-full",
+  "versionCode": 4,
+  "versionName": "1.3.0-full",
   "apkUrl": "https://raw.githubusercontent.com/Rafaellapa20/appnexusguard/main/NexusGuard-full-debug.apk",
-  "releaseNotes": "• Transferência de atualização otimizada (~70 % mais leve e sem redirecionamento)\n• Instalação automática ao regressar das permissões do Android\n• Suporte ao Gestor de Transferências nativo do Android\n• Dados 100 % reais nos sensores, limpeza MediaStore e Modo Jogo",
+  "releaseNotes": "• Funciona a 100 % sem precisar de ativar «Dados de utilização» (lê tamanho real das APKs, splits, libs nativas e apps sem uso diretamente pelo PackageManager)\n• Botão de 1 clique para abrir diretamente a página do Nexus Guard caso queiras desbloquear as Definições Restritas\n• Todos os cartões de Início, Bateria e Sistema desbloqueados imediatamente",
   "publishedAt": "23/10/2026"
 }
