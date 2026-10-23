@@ -66,6 +66,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -138,6 +139,7 @@ fun NexusGuardMainScreen(
     val isScanningClean by viewModel.isScanningClean.collectAsStateWithLifecycle()
     val analysisState by viewModel.analysisState.collectAsStateWithLifecycle()
     val boostSession by viewModel.boostSession.collectAsStateWithLifecycle()
+    val hasDndPermission by viewModel.hasDndPermission.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -331,11 +333,14 @@ fun NexusGuardMainScreen(
                 )
             }
             composable(NexusTab.CLEAN.route) {
+                LaunchedEffect(Unit) {
+                    viewModel.onEnterCleanTab()
+                }
                 RealCleanScreen(
                     snapshot = snapshot,
                     cleanReport = cleanReport,
                     isScanning = isScanningClean,
-                    onRefreshScan = viewModel::refreshCleanScan,
+                    onRefreshScan = { viewModel.refreshCleanScan(force = true) },
                     buildTrashIntent = viewModel::buildMoveToTrashIntentSender,
                     onTrashConfirmed = viewModel::onTrashRequestConfirmed
                 )
@@ -344,7 +349,7 @@ fun NexusGuardMainScreen(
                 RealGamesScreen(
                     snapshot = snapshot,
                     boostSession = boostSession,
-                    hasDndPermission = viewModel.hasDndPermission(),
+                    hasDndPermission = hasDndPermission,
                     onStartBoost = { pkg, name, monogram, dnd, stopBg, launchGame ->
                         viewModel.startBoost(pkg, name, monogram, dnd, stopBg, launchGame)
                         navController.navigate(NexusRoutes.ACTIVE_BOOST)
@@ -399,7 +404,7 @@ fun NexusGuardMainScreen(
                     preferences = preferences,
                     snapshot = snapshot,
                     cleanReport = cleanReport,
-                    hasDndPermission = viewModel.hasDndPermission(),
+                    hasDndPermission = hasDndPermission,
                     updateState = updateState,
                     onCheckUpdates = viewModel::checkForUpdatesManual,
                     onToggleDarkTheme = viewModel::setDarkTheme,

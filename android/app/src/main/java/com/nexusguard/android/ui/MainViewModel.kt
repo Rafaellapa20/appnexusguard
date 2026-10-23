@@ -13,7 +13,6 @@ import com.nexusguard.android.data.preferences.UserPreferencesRepository
 import com.nexusguard.android.data.preferences.UserPreferencesState
 import com.nexusguard.android.data.repository.AppUpdateUiState
 import com.nexusguard.android.data.repository.AppUpdaterRepository
-import com.nexusguard.android.data.repository.CleanCategoryType
 import com.nexusguard.android.data.repository.CleanScanReport
 import com.nexusguard.android.data.repository.CleanerRepository
 import com.nexusguard.android.data.repository.RealSystemSnapshot
@@ -28,6 +27,7 @@ import com.nexusguard.android.worker.SystemMonitorWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.collections.immutable.persistentListOf
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,24 +36,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-
-data class ProposedFixItem(
-    val id: String,
-    val title: String,
-    val subtitle: String,
-    val requiresSystemConfirmation: Boolean,
-    val actionRouteOrType: String, // "AUTO_BG", "OPEN_CLEAN", "OPEN_USAGE_PERM", "OPEN_MEDIA_PERM", "OPEN_SYSTEM"
-    val isResolved: Boolean = false
-)
-
-data class OneClickAnalysisState(
-    val isRunning: Boolean = false,
-    val progressFraction: Float = 0f,
-    val stepText: String = "",
-    val completedOnce: Boolean = false,
-    val proposedFixes: List<ProposedFixItem> = emptyList(),
-    val statusMessage: String? = null
-)
+import kotlin.math.abs
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -65,6 +48,10 @@ class MainViewModel @Inject constructor(
     private val appUpdaterRepository: AppUpdaterRepository,
     private val dao: NexusGuardDao
 ) : ViewModel() {
+
+    companion object {
+        private const val CLEAN_CACHE_MAX_AGE_MS = 10 * 60_000L // 10 minutos
+    }
 
     val updateState: StateFlow<AppUpdateUiState> = appUpdaterRepository.updateState
 
@@ -100,6 +87,9 @@ class MainViewModel @Inject constructor(
 
     val boostSession: StateFlow<BoostSessionState> = boostManager.sessionState
 
+    private val _hasDndPermission = MutableStateFlow(boostManager.hasDndPermission())
+    val hasDndPermission: StateFlow<Boolean> = _hasDndPermission.asStateFlow()
+
     private val _cleanReport = MutableStateFlow(
         CleanScanReport(
             hasMediaPermission = cleanerRepository.hasMediaReadPermission(),
@@ -114,13 +104,66 @@ class MainViewModel @Inject constructor(
     private val _isScanningClean = MutableStateFlow(false)
     val isScanningClean: StateFlow<Boolean> = _isScanningClean.asStateFlow()
 
+    private val _cleanScanStepText = MutableStateFlow("")
+    val cleanScanStepText: StateFlow<String> = _cleanScanStepText.asStateFlow()
+
     private val _analysisState = MutableStateFlow(OneClickAnalysisState())
     val analysisState: StateFlow<OneClickAnalysisState> = _analysisState.asStateFlow()
+
+    // Estados derivados por ecrã com distinctUntilChanged()
+    val homeUiState: StateFlow<HomeUiState> = ScreenUiStateMappers.observeHomeUiState(
+        snapshotFlow = liveSnapshot,
+        recentHistoryFlow = recentHistory,
+        analysisStateFlow = analysisState
+    ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = HomeUiState(isLoading = true)
+    )
+
+    val cleanUiState: StateFlow<CleanUiState> = ScreenUiStateMappers.observeCleanUiState(
+        snapshotFlow = liveSnapshot,
+        cleanReportFlow = cleanReport,
+        isScanningFlow = isScanningClean,
+        scanStepFlow = cleanScanStepText
+    ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = CleanUiState(isLoading = true)
+    )
+
+    val gamesUiState: StateFlow<GamesUiState> = ScreenUiStateMappers.observeGamesUiState(
+        snapshotFlow = liveSnapshot,
+        boostSessionFlow = boostSession,
+        hasDndFlow = hasDndPermission
+    ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = GamesUiState(isLoading = true)
+    )
+
+    val batteryUiState: StateFlow<BatteryUiState> = ScreenUiStateMappers.observeBatteryUiState(
+        snapshotFlow = liveSnapshot,
+        samplesFlow = batterySamples24h,
+        prefsFlow = preferencesState
+    ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = BatteryUiState(isLoading = true)
+    )
+
+    val systemUiState: StateFlow<SystemUiState> = ScreenUiStateMappers.observeSystemUiState(
+        snapshotFlow = liveSnapshot
+    ).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = SystemUiState(isLoading = true)
+    )
 
     init {
         viewModelScope.launch {
             SystemMonitorWorker.scheduleOrUpdateWeeklyMonitor(appContext, true)
-            refreshCleanScan()
+            // Fase 2: Não corre refreshCleanScan() no init! Corre ao entrar em Limpar ou em "Analisar agora".
         }
         viewModelScope.launch {
             appUpdaterRepository.checkForUpdates(isStartupCheck = true)
@@ -148,6 +191,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun onAppResumed() {
+        _hasDndPermission.value = boostManager.hasDndPermission()
         appUpdaterRepository.onAppResumed()
         viewModelScope.launch {
             sensorsRepository.refreshSlowMetrics(force = false)
@@ -166,15 +210,49 @@ class MainViewModel @Inject constructor(
 
     fun refreshAllRealData() {
         viewModelScope.launch {
-            sensorsRepository.readCurrentSnapshot()
-            refreshCleanScan()
+            sensorsRepository.refreshSlowMetrics(force = true)
         }
     }
 
-    fun refreshCleanScan() {
+    /**
+     * Chamado ao entrar no separador Limpar: reaproveita o último resultado se tiver menos de 10 min
+     * e o armazenamento livre não tiver mudado mais de 1 %.
+     */
+    fun onEnterCleanTab() {
+        refreshCleanScan(force = false)
+    }
+
+    fun refreshCleanScan(force: Boolean = true) {
+        if (_isScanningClean.value) return
         viewModelScope.launch {
+            val currentReport = _cleanReport.value
+            val storage = liveSnapshot.value.storage
+            val now = System.currentTimeMillis()
+            val ageMs = now - currentReport.timestampMillis
+            val totalStorage = storage.totalBytes.coerceAtLeast(1L)
+            val freeDeltaRatio = abs(storage.freeBytes - currentReport.freeStorageAtScanBytes).toDouble() / totalStorage.toDouble()
+            val permissionsUnchanged = currentReport.hasMediaPermission == cleanerRepository.hasMediaReadPermission() &&
+                currentReport.hasManageStoragePermission == cleanerRepository.hasManageExternalStoragePermission()
+
+            if (!force &&
+                currentReport.timestampMillis > 0L &&
+                ageMs < CLEAN_CACHE_MAX_AGE_MS &&
+                freeDeltaRatio <= 0.01 &&
+                permissionsUnchanged
+            ) {
+                return@launch
+            }
+
             _isScanningClean.value = true
-            _cleanReport.value = cleanerRepository.scanRealDeviceStorage()
+            _cleanScanStepText.value = "A pesquisar ficheiros no MediaStore..."
+            val scanned = cleanerRepository.scanRealDeviceStorage(
+                onStepProgress = { step -> _cleanScanStepText.value = step }
+            )
+            _cleanReport.value = scanned.copy(
+                timestampMillis = System.currentTimeMillis(),
+                freeStorageAtScanBytes = storage.freeBytes
+            )
+            _cleanScanStepText.value = ""
             _isScanningClean.value = false
         }
     }
@@ -185,23 +263,30 @@ class MainViewModel @Inject constructor(
             _analysisState.value = OneClickAnalysisState(
                 isRunning = true,
                 progressFraction = 0.20f,
-                stepText = "A verificar armazenamento real (StatFs / MediaStore)..."
+                stepText = "A verificar armazenamento real (StatFs / StorageStats)..."
             )
-            delay(250L)
+            delay(180L)
             val snapshot = sensorsRepository.readCurrentSnapshot()
 
             _analysisState.value = _analysisState.value.copy(
                 progressFraction = 0.50f,
                 stepText = "A ler estado térmico (PowerManager) e saúde da bateria..."
             )
-            delay(250L)
+            delay(180L)
 
             _analysisState.value = _analysisState.value.copy(
                 progressFraction = 0.80f,
                 stepText = "A analisar ficheiros desnecessários e apps sem uso..."
             )
-            val clean = cleanerRepository.scanRealDeviceStorage()
-            _cleanReport.value = clean
+            val clean = cleanerRepository.scanRealDeviceStorage(
+                onStepProgress = { step ->
+                    _analysisState.value = _analysisState.value.copy(stepText = step)
+                }
+            )
+            _cleanReport.value = clean.copy(
+                timestampMillis = System.currentTimeMillis(),
+                freeStorageAtScanBytes = snapshot.storage.freeBytes
+            )
 
             val fixes = mutableListOf<ProposedFixItem>()
 
@@ -210,7 +295,7 @@ class MainViewModel @Inject constructor(
                     ProposedFixItem(
                         id = "bg_processes",
                         title = "Terminar processos em segundo plano permitidos",
-                        subtitle = "Executa killBackgroundProcesses nas apps em fundo sem fechar apps abertas",
+                        subtitle = "Executa killBackgroundProcesses nas apps em fundo (exclui últimos 60 s)",
                         requiresSystemConfirmation = false,
                         actionRouteOrType = "AUTO_BG"
                     )
@@ -277,7 +362,7 @@ class MainViewModel @Inject constructor(
                 progressFraction = 1f,
                 stepText = "Análise concluída",
                 completedOnce = true,
-                proposedFixes = fixes,
+                proposedFixes = fixes.toImmutableList(),
                 statusMessage = if (fixes.isEmpty()) "Tudo ótimo! Nenhuma ação necessária." else null
             )
         }
@@ -288,7 +373,7 @@ class MainViewModel @Inject constructor(
             val stopped = sensorsRepository.stopPermittedBackgroundApps(recordInHistory = true)
             val updated = _analysisState.value.proposedFixes.map { fix ->
                 if (!fix.requiresSystemConfirmation) fix.copy(isResolved = true) else fix
-            }
+            }.toImmutableList()
             _analysisState.value = _analysisState.value.copy(
                 proposedFixes = updated,
                 statusMessage = if (stopped > 0) {
@@ -321,7 +406,7 @@ class MainViewModel @Inject constructor(
                 emptyFolders = emptyFoldersToDelete,
                 trashedFiles = trashedFiles
             )
-            refreshCleanScan()
+            refreshCleanScan(force = true)
             sensorsRepository.refreshSlowMetrics(force = true)
         }
     }
@@ -337,12 +422,10 @@ class MainViewModel @Inject constructor(
     fun onRestoreConfirmed(entryId: Long) {
         viewModelScope.launch {
             cleanerRepository.markHistoryEntryRestored(entryId)
-            refreshCleanScan()
+            refreshCleanScan(force = true)
             sensorsRepository.refreshSlowMetrics(force = true)
         }
     }
-
-    fun hasDndPermission(): Boolean = boostManager.hasDndPermission()
 
     fun startBoost(
         gamePackage: String,

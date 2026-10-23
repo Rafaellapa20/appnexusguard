@@ -93,7 +93,10 @@ class CleanerRepository @Inject constructor(
         }
     }
 
-    suspend fun scanRealDeviceStorage(): CleanScanReport = withContext(Dispatchers.IO) {
+    suspend fun scanRealDeviceStorage(
+        onStepProgress: (String) -> Unit = {}
+    ): CleanScanReport = withContext(Dispatchers.IO) {
+        onStepProgress("A verificar permissões e ficheiros...")
         val mediaGranted = hasMediaReadPermission()
         val manageGranted = hasManageExternalStoragePermission()
         val nowSeconds = System.currentTimeMillis() / 1000L
